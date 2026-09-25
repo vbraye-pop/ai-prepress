@@ -86,12 +86,18 @@
 .ii-placeholder-icon {
   position: absolute;
   inset: 0;
-  display: flex;
   align-items: center;
   justify-content: center;
   color: var(--steel);
   background:
     radial-gradient(ellipse 80% 60% at 50% 40%, #1a1820 0%, #0a0a10 100%);
+}
+
+/* an unconditional `display` here would beat the [hidden] attribute's UA
+   default (equal specificity, author origin wins) and show the placeholder
+   permanently regardless of what JS sets .hidden to - scope it instead */
+.ii-placeholder-icon:not([hidden]) {
+  display: flex;
 }
 
 .ii-chip {
