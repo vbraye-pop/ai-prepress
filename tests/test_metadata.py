@@ -1,9 +1,14 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 import tifffile
 from PIL import Image
 
+from ai_prepress.io import save
 from ai_prepress.metadata import describe
+
+ADOBE_RGB_PROFILE = Path("/System/Library/ColorSync/Profiles/AdobeRGB1998.icc")
 
 
 def test_tiff_reports_real_dimensions_and_dpi(tmp_path):
@@ -18,6 +23,38 @@ def test_tiff_reports_real_dimensions_and_dpi(tmp_path):
     assert info.dpi == (300.0, 300.0)
     assert info.compression == "NONE"
     assert info.icc_profile_present is False
+    assert info.icc_profile == {}
+    assert info.colourspace_guess == "sRGB"  # the fallback assumption for an untagged file
+    assert "ImageWidth" in info.raw_tags
+
+
+def test_reads_the_real_embedded_profile_fields_not_a_guess(tmp_path):
+    if not ADOBE_RGB_PROFILE.exists():
+        pytest.skip("no wide-gamut ICC profile available on this machine")
+    profile = ADOBE_RGB_PROFILE.read_bytes()
+    array = np.random.default_rng(3).integers(0, 65535, size=(20, 30, 3), dtype=np.uint16)
+    path = tmp_path / "tagged.tiff"
+    save(array, path, icc_profile=profile)
+
+    info = describe(path)
+
+    # these come straight from the profile's own header/tags, not inferred
+    assert info.icc_profile["description"] == "Adobe RGB (1998)"
+    assert info.icc_profile["color_space"] == "RGB"
+    assert info.icc_profile["rendering_intent"] in {
+        "perceptual",
+        "relative colorimetric",
+        "saturation",
+        "absolute colorimetric",
+    }
+    assert info.icc_profile["icc_version"] is not None
+    assert info.icc_profile["copyright"]
+
+    # the heuristic guess stays available too, alongside the real data - not replaced by it
+    assert info.colourspace_guess == "Adobe RGB (1998)"
+
+    # the raw tag dump never leaks the profile's own raw bytes back out as a giant string
+    assert "InterColorProfile" not in info.raw_tags
 
 
 def test_flags_16bit_storage_that_looks_upsampled(tmp_path):

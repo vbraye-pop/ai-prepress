@@ -21,10 +21,15 @@ function setupViewTabs() {
   });
 }
 
+function labelize(key) {
+  return key.charAt(0).toUpperCase() + key.slice(1).replaceAll("_", " ");
+}
+
 function setupInspect() {
   const placeholder = document.getElementById("inspect-placeholder");
   const report = document.getElementById("inspect-report");
   const exifBlock = document.getElementById("exif-block");
+  const rawTagsBlock = document.getElementById("raw-tags-block");
 
   const importer = createImageImport({
     label: "Drop an image here",
@@ -34,6 +39,7 @@ function setupInspect() {
         placeholder.hidden = false;
         report.hidden = true;
         exifBlock.hidden = true;
+        rawTagsBlock.hidden = true;
         return;
       }
       runInspect(file);
@@ -45,6 +51,7 @@ function setupInspect() {
     placeholder.hidden = true;
     report.hidden = true;
     exifBlock.hidden = true;
+    rawTagsBlock.hidden = true;
     importer.setStatus("reading...");
 
     const body = new FormData();
@@ -67,6 +74,10 @@ function setupInspect() {
     importer.setStatus(null);
     importer.setPreviewUrl(`/api/file/${info.file_id}/preview.jpg?t=${Date.now()}`);
 
+    // every field the profile itself declares - real data, not inferred.
+    // empty when there's genuinely no profile to read.
+    const iccRows = Object.entries(info.icc_profile || {}).map(([key, value]) => [labelize(key), value]);
+
     renderReport(report, [
       ["Dimensions", `${info.width} x ${info.height}`],
       ["Channels", info.channels],
@@ -76,7 +87,10 @@ function setupInspect() {
       ["Unique values / ch", info.unique_values_per_channel.join(", ")],
       ["Upsampled from 8-bit?", info.looks_upsampled_from_8bit ? "yes" : "no", info.looks_upsampled_from_8bit ? "warn" : "good"],
       ["ICC profile", info.icc_profile_present ? "present" : "missing", info.icc_profile_present ? "good" : "bad"],
-      ["Color space guess", info.colourspace_guess],
+      ...iccRows,
+      // heuristic bucket used internally for color-transfer math - shown alongside the
+      // real profile fields above, not instead of them, since it isn't always the same thing
+      ["Color space (guess)", info.colourspace_guess],
       ["DPI", info.dpi ? info.dpi.map((v) => v.toFixed(0)).join(" x ") : "not set"],
       ["Compression", info.compression || "n/a"],
     ]);
@@ -86,6 +100,12 @@ function setupInspect() {
     if (exifEntries.length) {
       renderReport(document.getElementById("exif-report"), exifEntries);
       exifBlock.hidden = false;
+    }
+
+    const rawTagEntries = Object.entries(info.raw_tags || {});
+    if (rawTagEntries.length) {
+      renderReport(document.getElementById("raw-tags-report"), rawTagEntries);
+      rawTagsBlock.hidden = false;
     }
   }
 }
