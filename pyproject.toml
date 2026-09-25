@@ -1,0 +1,25 @@
+[project]
+name = "ai-prepress"
+version = "0.1.0"
+description = "AI-assisted prepress toolkit: masking, color matching, cropping, retouching, dust removal, background replacement"
+authors = [
+    { name = "vbraye-pop", email = "valerien.braye@proseonpixels.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.1",
+    "tifffile>=2025.1.1",
+    "pillow>=11.0",
+    "colour-science>=0.4.5",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.11,<0.9.0"]
+build-backend = "uv_build"
