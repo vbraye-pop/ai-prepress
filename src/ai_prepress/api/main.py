@@ -31,6 +31,18 @@ _STORE_DIR = Path(tempfile.gettempdir()) / "ai-prepress-results"
 _STORE_DIR.mkdir(exist_ok=True)
 _UI_DIR = Path(__file__).resolve().parent.parent.parent.parent / "ui"
 
+# plenty for anything this UI displays a preview at - no point encoding,
+# transferring, and decoding a full-resolution image for a ~300px thumbnail
+_PREVIEW_MAX_EDGE = 1024
+
+
+def _downsample_for_preview(array: np.ndarray, max_edge: int = _PREVIEW_MAX_EDGE) -> np.ndarray:
+    longest = max(array.shape[0], array.shape[1])
+    if longest <= max_edge:
+        return array
+    stride = -(-longest // max_edge)  # ceil division
+    return array[::stride, ::stride]
+
 
 def _store_bytes(data: bytes, suffix: str) -> str:
     file_id = uuid.uuid4().hex
@@ -88,17 +100,19 @@ async def api_match_look(
     )
 
 
-@app.get("/api/file/{file_id}/preview.png")
+@app.get("/api/file/{file_id}/preview.jpg")
 def get_preview(file_id: str):
     """Browsers can't render 16-bit TIFF, so this downsamples to 8-bit just for display.
-    The stored file itself (/download) keeps full bit depth."""
+    The stored file itself (/download) keeps full bit depth and resolution - this is a
+    thumbnail, not a deliverable, so it's downsized and JPEG-compressed for speed."""
     loaded = core_io.load(_find_file(file_id))
-    as_8bit = core_io.from_unit_float(core_io.to_unit_float(loaded.array), np.uint8)
+    small = _downsample_for_preview(loaded.array)
+    as_8bit = core_io.from_unit_float(core_io.to_unit_float(small), np.uint8)
 
     buffer = io.BytesIO()
-    Image.fromarray(as_8bit[..., :3]).save(buffer, format="PNG")
+    Image.fromarray(as_8bit[..., :3]).save(buffer, format="JPEG", quality=85)
     buffer.seek(0)
-    return StreamingResponse(buffer, media_type="image/png")
+    return StreamingResponse(buffer, media_type="image/jpeg")
 
 
 @app.get("/api/file/{file_id}/download")

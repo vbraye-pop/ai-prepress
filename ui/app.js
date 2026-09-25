@@ -65,7 +65,7 @@ function setupInspect() {
 
     const info = await response.json();
     importer.setStatus(null);
-    importer.setPreviewUrl(`/api/file/${info.file_id}/preview.png?t=${Date.now()}`);
+    importer.setPreviewUrl(`/api/file/${info.file_id}/preview.jpg?t=${Date.now()}`);
 
     renderReport(report, [
       ["Dimensions", `${info.width} x ${info.height}`],
@@ -140,7 +140,7 @@ function setupMatchLook() {
     const result = await response.json();
     status.textContent = "done";
 
-    document.getElementById("result-preview").src = `/api/file/${result.result_id}/preview.png?t=${Date.now()}`;
+    document.getElementById("result-preview").src = `/api/file/${result.result_id}/preview.jpg?t=${Date.now()}`;
     document.getElementById("match-download").href = `/api/file/${result.result_id}/download`;
 
     renderReport(document.getElementById("match-report"), [
