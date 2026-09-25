@@ -2,32 +2,68 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ai-prepress</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <h1>ai-prepress &mdash; match look</h1>
-  <p>Pick a target image and a reference image. The reference's color statistics get applied to the target.</p>
+  <header>
+    <h1>ai-prepress</h1>
+    <p class="tagline">color matching and file inspection, running locally</p>
+  </header>
 
-  <form id="match-form">
-    <label>Target <input type="file" id="target" required /></label>
-    <label>Reference <input type="file" id="reference" required /></label>
-    <label>Method
-      <select id="method">
-        <option value="mkl">MKL (full covariance)</option>
-        <option value="reinhard">Reinhard (mean/std)</option>
-      </select>
-    </label>
-    <button type="submit">Run</button>
-  </form>
+  <nav class="tabs">
+    <button class="tab-button active" data-tab="match-look">Match Look</button>
+    <button class="tab-button" data-tab="inspect">Inspect Image</button>
+  </nav>
 
-  <div id="status"></div>
+  <main>
+    <section id="tab-match-look" class="tab-panel active">
+      <form id="match-form" class="card">
+        <div class="field-row">
+          <label>Target <input type="file" id="target" required /></label>
+          <label>Reference <input type="file" id="reference" required /></label>
+        </div>
+        <label>Method
+          <select id="method">
+            <option value="mkl">MKL (full covariance)</option>
+            <option value="reinhard">Reinhard (mean/std)</option>
+          </select>
+        </label>
+        <button type="submit">Run match look</button>
+      </form>
 
-  <div id="output" hidden>
-    <img id="preview" alt="result preview" />
-    <dl id="report"></dl>
-    <a id="download" href="#">Download full-precision TIFF</a>
-  </div>
+      <div id="match-status" class="status"></div>
+
+      <div id="match-output" class="card" hidden>
+        <div class="thumb-row">
+          <figure><img id="target-preview" alt="target" /><figcaption>target</figcaption></figure>
+          <figure><img id="reference-preview" alt="reference" /><figcaption>reference</figcaption></figure>
+          <figure><img id="result-preview" alt="result" /><figcaption>result</figcaption></figure>
+        </div>
+        <dl id="match-report" class="report"></dl>
+        <a id="match-download" href="#">Download full-precision TIFF</a>
+      </div>
+    </section>
+
+    <section id="tab-inspect" class="tab-panel">
+      <form id="inspect-form" class="card">
+        <label>Image <input type="file" id="inspect-image" required /></label>
+        <button type="submit">Inspect</button>
+      </form>
+
+      <div id="inspect-status" class="status"></div>
+
+      <div id="inspect-output" class="card" hidden>
+        <figure><img id="inspect-preview" alt="inspected image" /></figure>
+        <dl id="inspect-report" class="report"></dl>
+        <div id="exif-block" hidden>
+          <h3>EXIF</h3>
+          <dl id="exif-report" class="report"></dl>
+        </div>
+      </div>
+    </section>
+  </main>
 
   <script src="app.js"></script>
 </body>
