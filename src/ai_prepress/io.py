@@ -17,12 +17,13 @@ input/output.
 
 from __future__ import annotations
 
+import io as _stdlib_io
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import tifffile
-from PIL import Image
+from PIL import Image, ImageCms
 
 ICC_TAG = 34675  # TIFFTAG_ICCPROFILE
 
@@ -115,3 +116,22 @@ def from_unit_float(array: np.ndarray, dtype: np.dtype) -> np.ndarray:
     if dtype in (np.float32, np.float64):
         return array.astype(dtype)
     raise ValueError(f"unhandled dtype: {dtype}")
+
+
+def identify_colourspace(icc_profile: bytes | None) -> str:
+    """Best-effort match of an embedded profile to a named colour-science RGB space.
+
+    A substring check on the profile's description tag, not a real ICC parser -
+    enough to tell sRGB from Adobe RGB apart, not meant for arbitrary custom
+    profiles. Falls back to sRGB, the same assumption most untagged-file
+    handling makes anyway.
+    """
+    if not icc_profile:
+        return "sRGB"
+    try:
+        description = ImageCms.ImageCmsProfile(_stdlib_io.BytesIO(icc_profile)).profile.profile_description
+    except Exception:
+        return "sRGB"
+    if "adobe rgb" in description.lower():
+        return "Adobe RGB (1998)"
+    return "sRGB"

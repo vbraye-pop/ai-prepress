@@ -7,17 +7,12 @@ depth actually survived, and whether the ICC profile is still attached.
 
 from __future__ import annotations
 
-import io as bytesio
 from dataclasses import dataclass
 
 import colour
 import numpy as np
-from PIL import Image, ImageCms
 
-from ai_prepress.io import LoadedImage, to_unit_float
-
-_SRGB_PROFILE = ImageCms.createProfile("sRGB")
-_LAB_PROFILE = ImageCms.createProfile("LAB")
+from ai_prepress.io import LoadedImage, identify_colourspace, to_unit_float
 
 
 @dataclass
@@ -31,30 +26,22 @@ class AcceptanceReport:
 
 
 def _to_lab(image: LoadedImage) -> np.ndarray:
-    """Convert to CIE Lab through the image's own ICC profile.
+    """Convert to CIE Lab through the image's own color space, staying in float the whole way.
 
     Delta-E needs Lab, not RGB - feeding it raw RGB numbers gives a value
     that looks plausible but means nothing, since "how different two colors
-    look" depends on which color space the numbers are in. If there's no
-    embedded profile, sRGB is assumed - the same assumption a lot of
-    software makes silently, made explicit here instead.
+    look" depends on which color space the numbers are in. Going through
+    Pillow's ImageCms for this would mean quantizing to 8-bit first (Pillow
+    can't hold 16-bit RGB, same wall hit in io.py), which would make this
+    check blind to exactly the sub-8-bit drift it exists to catch - so this
+    goes through colour-science's own RGB->XYZ->Lab math instead, entirely
+    in float. If there's no embedded profile, sRGB is assumed - the same
+    assumption a lot of software makes silently, made explicit here instead.
     """
-    unit = to_unit_float(image.array)[..., :3]
-    as_8bit = np.clip(unit * 255.0 + 0.5, 0, 255).astype(np.uint8)
-
-    if image.icc_profile:
-        input_profile = ImageCms.ImageCmsProfile(bytesio.BytesIO(image.icc_profile))
-    else:
-        input_profile = _SRGB_PROFILE
-
-    transform = ImageCms.buildTransform(input_profile, _LAB_PROFILE, "RGB", "LAB")
-    lab_im = ImageCms.applyTransform(Image.fromarray(as_8bit, mode="RGB"), transform)
-    lab = np.array(lab_im).astype(np.float64)
-    # PIL packs Lab into 0-255 per channel; unpack to the real ranges.
-    lab[..., 0] *= 100.0 / 255.0
-    lab[..., 1] -= 128.0
-    lab[..., 2] -= 128.0
-    return lab
+    rgb = to_unit_float(image.array)[..., :3]
+    space = colour.RGB_COLOURSPACES[identify_colourspace(image.icc_profile)]
+    xyz = colour.RGB_to_XYZ(rgb, space, apply_cctf_decoding=True)
+    return colour.XYZ_to_Lab(xyz, space.whitepoint)
 
 
 def acceptance_report(before: LoadedImage, after: LoadedImage) -> AcceptanceReport:
@@ -65,8 +52,9 @@ def acceptance_report(before: LoadedImage, after: LoadedImage) -> AcceptanceRepo
     array = after.array
     unique_counts = [int(np.unique(array[..., c]).size) for c in range(min(array.shape[-1], 3))]
     # only meaningful if the file is stored wider than 8 bits per channel -
-    # a genuinely 8-bit source having <=256 values isn't a collapse, it's normal
-    collapsed = array.dtype.itemsize > 1 and all(count <= 256 for count in unique_counts)
+    # a genuinely 8-bit source having <=256 values isn't a collapse, it's normal.
+    # any channel collapsing counts, not just all three at once.
+    collapsed = array.dtype.itemsize > 1 and any(count <= 256 for count in unique_counts)
 
     return AcceptanceReport(
         delta_e_mean=float(np.mean(delta_e)),

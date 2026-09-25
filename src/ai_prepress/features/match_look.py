@@ -24,7 +24,7 @@ import colour
 import numpy as np
 from PIL import ImageCms
 
-from ai_prepress.io import LoadedImage, from_unit_float, to_unit_float
+from ai_prepress.io import LoadedImage, from_unit_float, identify_colourspace, to_unit_float
 
 _EPS = 1e-6
 
@@ -41,27 +41,6 @@ _LMS_TO_LAB = np.array([[1, 1, 1], [1, 1, -2], [1, -1, 0]]) @ np.diag(
     [1 / np.sqrt(3), 1 / np.sqrt(6), 1 / np.sqrt(2)]
 )
 _LAB_TO_LMS = np.linalg.inv(_LMS_TO_LAB)
-
-
-def _identify_colourspace(icc_profile: bytes | None) -> str:
-    """Best-effort match of an embedded profile to a named colour-science RGB space.
-
-    This is a substring check on the profile's description tag, not a real
-    ICC parser - good enough to tell "this is sRGB" from "this is Adobe RGB",
-    not meant to handle arbitrary custom profiles. Falls back to sRGB, the
-    same assumption most untagged-file handling makes anyway.
-    """
-    if not icc_profile:
-        return "sRGB"
-    try:
-        import io as bytesio
-
-        description = ImageCms.ImageCmsProfile(bytesio.BytesIO(icc_profile)).profile.profile_description
-    except Exception:
-        return "sRGB"
-    if "adobe rgb" in description.lower():
-        return "Adobe RGB (1998)"
-    return "sRGB"
 
 
 def _to_common_space(rgb: np.ndarray, space: str) -> np.ndarray:
@@ -125,8 +104,8 @@ def match_look(
     method: Literal["mkl", "reinhard"] = "mkl",
 ) -> LoadedImage:
     """Apply reference's color statistics to target. Alpha channels aren't handled - RGB only for now."""
-    target_space = _identify_colourspace(target.icc_profile)
-    reference_space = _identify_colourspace(reference.icc_profile)
+    target_space = identify_colourspace(target.icc_profile)
+    reference_space = identify_colourspace(reference.icc_profile)
 
     target_rgb = _to_common_space(to_unit_float(target.array)[..., :3], target_space)
     reference_rgb = _to_common_space(to_unit_float(reference.array)[..., :3], reference_space)

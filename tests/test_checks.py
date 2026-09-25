@@ -35,10 +35,26 @@ def test_missing_profile_is_flagged():
 def test_8bit_collapse_flag_only_fires_on_wider_storage():
     ramp = np.linspace(0, 65535, 512, dtype=np.uint16)
     wide = np.stack([np.tile(ramp, (16, 1))] * 3, axis=-1)
-    collapsed_16bit = (wide // 65535 * 65535).astype(np.uint16)  # all one value, still 16-bit storage
+    # quantized down to ~256 distinct levels but still stored as uint16 -
+    # the realistic shape of an 8-bit collapse, not a degenerate all-one-value case
+    quantized_to_8bit_levels = ((wide.astype(np.int64) // 257) * 257).astype(np.uint16)
 
     normal_8bit = LoadedImage(array=np.full((16, 512, 3), 128, dtype=np.uint8), icc_profile=_SRGB, bit_depth=8)
-    fake_16bit = LoadedImage(array=collapsed_16bit, icc_profile=_SRGB, bit_depth=16)
+    fake_16bit = LoadedImage(array=quantized_to_8bit_levels, icc_profile=_SRGB, bit_depth=16)
 
     assert acceptance_report(normal_8bit, normal_8bit).bit_depth_collapsed is False
     assert acceptance_report(fake_16bit, fake_16bit).bit_depth_collapsed is True
+
+
+def test_delta_e_catches_drift_smaller_than_one_8bit_step():
+    # 65535 / 255 =~ 257 - a shift of 50 is well under a single 8-bit step,
+    # so this would read as zero drift if the check quantized to 8-bit first
+    base = np.full((16, 16, 3), 30000, dtype=np.uint16)
+    shifted = base.copy()
+    shifted[..., 0] += 50
+
+    before = LoadedImage(array=base, icc_profile=_SRGB, bit_depth=16)
+    after = LoadedImage(array=shifted, icc_profile=_SRGB, bit_depth=16)
+
+    report = acceptance_report(before, after)
+    assert 0 < report.delta_e_mean < 1
