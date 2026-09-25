@@ -4,62 +4,88 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ai-prepress</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="tokens.css" />
+  <link rel="stylesheet" href="components.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <h1>ai-prepress</h1>
-    <p class="tagline">color matching and file inspection, running locally</p>
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">AP</span>
+      <b>ai-prepress</b>
+    </div>
+    <nav class="pill-tabs" id="view-tabs">
+      <button class="pill-tab" data-view="inspect" data-active="true">Inspect</button>
+      <button class="pill-tab" data-view="match-look" data-active="false">Match Look</button>
+    </nav>
   </header>
 
-  <nav class="tabs">
-    <button class="tab-button active" data-tab="match-look">Match Look</button>
-    <button class="tab-button" data-tab="inspect">Inspect Image</button>
-  </nav>
-
   <main>
-    <section id="tab-match-look" class="tab-panel active">
-      <form id="match-form" class="card">
-        <div class="field-row">
-          <label>Target <input type="file" id="target" required /></label>
-          <label>Reference <input type="file" id="reference" required /></label>
+    <section id="view-inspect" class="view active">
+      <div id="dropzone" class="dropzone" tabindex="0">
+        <input type="file" id="inspect-file-input" accept="image/png,image/jpeg,.tif,.tiff" hidden />
+        <div class="dropzone-content">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <p class="t-h5">Drop an image here</p>
+          <p class="t-caption">or click to browse — TIFF, PNG, JPEG</p>
         </div>
-        <label>Method
-          <select id="method">
-            <option value="mkl">MKL (full covariance)</option>
-            <option value="reinhard">Reinhard (mean/std)</option>
-          </select>
-        </label>
-        <button type="submit">Run match look</button>
-      </form>
+      </div>
 
-      <div id="match-status" class="status"></div>
-
-      <div id="match-output" class="card" hidden>
-        <div class="thumb-row">
-          <figure><img id="target-preview" alt="target" /><figcaption>target</figcaption></figure>
-          <figure><img id="reference-preview" alt="reference" /><figcaption>reference</figcaption></figure>
-          <figure><img id="result-preview" alt="result" /><figcaption>result</figcaption></figure>
+      <div id="inspect-workspace" class="workspace" hidden>
+        <div class="viewport-panel">
+          <div class="viewport-chip t-cap-bold" id="inspect-filename"></div>
+          <img id="inspect-preview" alt="inspected image" />
         </div>
-        <dl id="match-report" class="report"></dl>
-        <a id="match-download" href="#">Download full-precision TIFF</a>
+        <aside class="inspector-panel">
+          <div class="inspector-head">
+            <span class="t-eyebrow">Stats</span>
+            <button id="inspect-reset" class="btn btn-ghost">Inspect another</button>
+          </div>
+          <dl id="inspect-report" class="stat-list"></dl>
+          <div id="exif-block" hidden>
+            <div class="divider"></div>
+            <span class="t-eyebrow">EXIF</span>
+            <dl id="exif-report" class="stat-list"></dl>
+          </div>
+        </aside>
       </div>
     </section>
 
-    <section id="tab-inspect" class="tab-panel">
-      <form id="inspect-form" class="card">
-        <label>Image <input type="file" id="inspect-image" required /></label>
-        <button type="submit">Inspect</button>
-      </form>
+    <section id="view-match-look" class="view">
+      <div class="container-narrow">
+        <form id="match-form" class="card">
+          <div class="field-row">
+            <label>Target <input class="input" type="file" id="target" required /></label>
+            <label>Reference <input class="input" type="file" id="reference" required /></label>
+          </div>
+          <label>Method
+            <select class="input" id="method">
+              <option value="mkl">MKL (full covariance)</option>
+              <option value="reinhard">Reinhard (mean/std)</option>
+            </select>
+          </label>
+          <button type="submit" class="btn btn-primary">Run match look</button>
+        </form>
 
-      <div id="inspect-status" class="status"></div>
+        <div id="match-status" class="status"></div>
 
-      <div id="inspect-output" class="card" hidden>
-        <figure><img id="inspect-preview" alt="inspected image" /></figure>
-        <dl id="inspect-report" class="report"></dl>
-        <div id="exif-block" hidden>
-          <h3>EXIF</h3>
-          <dl id="exif-report" class="report"></dl>
+        <div id="match-output" class="card" hidden>
+          <div class="thumb-row">
+            <figure><img id="target-preview" alt="target" /><figcaption class="t-caption">target</figcaption></figure>
+            <figure><img id="reference-preview" alt="reference" /><figcaption class="t-caption">reference</figcaption></figure>
+            <figure><img id="result-preview" alt="result" /><figcaption class="t-caption">result</figcaption></figure>
+          </div>
+          <dl id="match-report" class="stat-list"></dl>
+          <a id="match-download" class="btn btn-secondary" href="#">Download full-precision TIFF</a>
         </div>
       </div>
     </section>

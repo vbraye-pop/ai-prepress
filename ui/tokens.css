@@ -1,0 +1,143 @@
+/* POP R&D Dark Theme — derived from Notion light system, retuned for dark surfaces.
+   Burgundy (#5E0B15) replaces deep purple as primary. Brand 5 harmonized for dark legibility. */
+
+:root {
+  /* ── Surfaces (deep navy-charcoal, per dark_surface choice 2) ───────── */
+  --canvas:        #0d0d13;   /* page background — deepest */
+  --surface-soft:  #15151d;   /* quieter section divisions */
+  --surface:       #1f1f2a;   /* cards, panels — clear lift from canvas */
+  --surface-raised:#2a2a37;   /* elevated panels, modals */
+  --surface-sunken:#08080c;   /* viewport, code, terminals */
+
+  --hairline:        #2a2a36;
+  --hairline-soft:   #22222c;
+  --hairline-strong: #3a3a48;
+
+  /* ── Ink (text on dark) ─────────────────────────────────────────────── */
+  --ink-pure:    #ffffff;
+  --ink:         #e8e6e1;     /* primary text — warm off-white, echoes Notion charcoal */
+  --ink-soft:    #c9c6bf;     /* body emphasis */
+  --slate:       #9b988f;     /* secondary text */
+  --steel:       #6f6d66;     /* tertiary, footer */
+  --stone:       #4f4d47;     /* muted labels */
+  --muted:       #3a3833;     /* disabled, placeholders */
+
+  /* ── Primary: Burgundy (replaces Notion purple) ─────────────────────── */
+  --primary:         #8a1224;   /* derived from #5E0B15 — lifted ~15L for AA on dark */
+  --primary-pressed: #6b0d1c;
+  --primary-deep:    #5e0b15;   /* the seed color — used for hero / decorative */
+  --primary-soft:    #b32436;   /* lifted further for chips, focus rings */
+  --primary-tint:    #2a1015;   /* very dark burgundy tint, for backgrounds */
+  --on-primary:      #ffffff;
+
+  /* ── Brand 5 — RAW (as provided by user) ─────────────────────────────── */
+  --brand-1-raw: #b48dfc; /* lavender */
+  --brand-2-raw: #3beb8d; /* mint */
+  --brand-3-raw: #fd5e83; /* rose */
+  --brand-4-raw: #fde74c; /* yellow */
+  --brand-5-raw: #5d53e9; /* indigo */
+
+  /* ── Brand 5 — HARMONIZED for dark UI (slightly desaturated, balanced L) ── */
+  --brand-1: #b48dfc;   /* lavender — already great */
+  --brand-2: #4ce39a;   /* mint — pulled L up a touch, sat down for less neon */
+  --brand-3: #f56b8c;   /* rose — sat softened */
+  --brand-4: #f5dc5e;   /* yellow — slightly warmer, less acid */
+  --brand-5: #6e62ec;   /* indigo — lifted L for dark surface contrast */
+
+  /* Deep variants (for tag text, deep accents) */
+  --brand-1-deep: #6a4ca8;
+  --brand-2-deep: #1f8a55;
+  --brand-3-deep: #a02e4e;
+  --brand-4-deep: #8a7320;
+  --brand-5-deep: #3b32a8;
+
+  /* ── Card tints — dark, low-saturation (per card_tints choice) ───────── */
+  --tint-lavender: #261d35;
+  --tint-mint:     #112a1f;
+  --tint-rose:     #2e1620;
+  --tint-yellow:   #2a2614;
+  --tint-indigo:   #1a1838;
+  --tint-burgundy: #2a1015;
+  --tint-neutral:  #1f1f29;
+
+  /* ── Semantic ────────────────────────────────────────────────────────── */
+  --success: #4ce39a;
+  --warning: #f5b13c;
+  --error:   #f56b6b;
+  --info:    #6e62ec;
+
+  /* ── Link ────────────────────────────────────────────────────────────── */
+  --link:         #8aa9ff;
+  --link-pressed: #b6c5ff;
+
+  /* ── Radii ───────────────────────────────────────────────────────────── */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-2xl: 20px;
+  --r-3xl: 24px;
+  --r-full: 9999px;
+
+  /* ── Spacing ─────────────────────────────────────────────────────────── */
+  --s-xxs: 4px;
+  --s-xs:  8px;
+  --s-sm:  12px;
+  --s-md:  16px;
+  --s-lg:  20px;
+  --s-xl:  24px;
+  --s-2xl: 32px;
+  --s-3xl: 40px;
+  --s-section-sm: 48px;
+  --s-section:    64px;
+  --s-section-lg: 96px;
+  --s-hero:       120px;
+
+  /* ── Shadows (deeper on dark) ───────────────────────────────────────── */
+  --shadow-1: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-2: 0 4px 12px rgba(0,0,0,.45);
+  --shadow-3: 0 24px 48px -8px rgba(0,0,0,.6);
+  --shadow-4: 0 16px 48px -8px rgba(0,0,0,.55);
+  --glow-primary: 0 0 0 1px var(--primary-soft), 0 0 24px -4px rgba(179,36,54,.35);
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-sans: "Inter", "Notion Sans", -apple-system, system-ui, "Segoe UI", Helvetica, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* ── Base reset ──────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
+}
+
+::selection { background: var(--primary); color: var(--on-primary); }
+
+/* ── Type scale ──────────────────────────────────────────────────────── */
+.t-hero      { font-size: 80px; font-weight: 600; line-height: 1.05; letter-spacing: -2px; }
+.t-display   { font-size: 56px; font-weight: 600; line-height: 1.10; letter-spacing: -1px; }
+.t-h1        { font-size: 48px; font-weight: 600; line-height: 1.15; letter-spacing: -0.5px; }
+.t-h2        { font-size: 36px; font-weight: 600; line-height: 1.20; letter-spacing: -0.5px; }
+.t-h3        { font-size: 28px; font-weight: 600; line-height: 1.25; }
+.t-h4        { font-size: 22px; font-weight: 600; line-height: 1.30; }
+.t-h5        { font-size: 18px; font-weight: 600; line-height: 1.40; }
+.t-subtitle  { font-size: 18px; font-weight: 400; line-height: 1.50; color: var(--ink-soft); }
+.t-body      { font-size: 16px; font-weight: 400; line-height: 1.55; }
+.t-body-md   { font-size: 16px; font-weight: 500; line-height: 1.55; }
+.t-body-sm   { font-size: 14px; font-weight: 400; line-height: 1.50; }
+.t-body-sm-md{ font-size: 14px; font-weight: 500; line-height: 1.50; }
+.t-caption   { font-size: 13px; font-weight: 400; line-height: 1.40; color: var(--slate); }
+.t-cap-bold  { font-size: 13px; font-weight: 600; line-height: 1.40; }
+.t-micro     { font-size: 12px; font-weight: 500; line-height: 1.40; }
+.t-eyebrow   { font-size: 11px; font-weight: 600; line-height: 1.40; letter-spacing: 1.2px;
+               text-transform: uppercase; color: var(--slate); }
+.t-mono      { font-family: var(--font-mono); }

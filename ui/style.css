@@ -1,92 +1,202 @@
-:root {
-  --color-bg: #f7f7f5;
-  --color-surface: #ffffff;
-  --color-border: #e2e0da;
-  --color-text: #1f1f1d;
-  --color-text-muted: #6b6a64;
-  --color-accent: #2a2a28;
-  --color-accent-text: #ffffff;
-  --color-warn: #b3541e;
-  --radius: 8px;
-  --spacing: 1rem;
-  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Consolas, monospace;
-}
+/* App-specific styles on top of tokens.css + components.css (POP R&D dark handoff).
+   Vendored files are dropped in as-is per that bundle's README - this file is the only
+   one that should change as the UI grows. */
 
-* {
-  box-sizing: border-box;
+html, body {
+  height: 100%;
 }
 
 body {
-  font-family: var(--font-sans);
-  background: var(--color-bg);
-  color: var(--color-text);
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 2rem 1.25rem 4rem;
-}
-
-header h1 {
-  margin: 0;
-  font-size: 1.5rem;
-}
-
-.tagline {
-  margin: 0.25rem 0 1.5rem;
-  color: var(--color-text-muted);
-  font-size: 0.9rem;
-}
-
-.tabs {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1.25rem;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.tab-button {
-  background: none;
-  border: none;
-  padding: 0.6rem 0.9rem;
-  font-size: 0.95rem;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-}
-
-.tab-button.active {
-  color: var(--color-text);
-  border-bottom-color: var(--color-accent);
-}
-
-.tab-panel {
-  display: none;
-}
-
-.tab-panel.active {
-  display: block;
-}
-
-.card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  padding: 1.25rem;
-  margin-bottom: 1rem;
-}
-
-form label {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.9rem;
-  margin-bottom: 0.9rem;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────────── */
+.topbar {
+  height: 56px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-lg);
+  padding: 0 var(--s-xl);
+  background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.topbar .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar .brand .mark {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  background: var(--primary);
+  color: var(--on-primary);
+  display: grid;
+  place-items: center;
+  font: 700 12px/1 var(--font-sans);
+}
+
+.topbar .brand b {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--s-xl);
+}
+
+.view {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.view.active {
+  display: flex;
+}
+
+/* ── Inspect: dropzone ───────────────────────────────────────────────── */
+.dropzone {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-sunken);
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r-xl);
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+
+.dropzone[data-drag="true"] {
+  border-color: var(--primary-soft);
+  background: var(--tint-burgundy);
+}
+
+.dropzone-content {
+  text-align: center;
+  color: var(--slate);
+  pointer-events: none;
+}
+
+.dropzone-content svg {
+  color: var(--steel);
+  margin-bottom: var(--s-md);
+}
+
+.dropzone-content .t-h5 {
+  color: var(--ink);
+  margin: 0 0 4px;
+}
+
+.dropzone-content .t-caption {
+  margin: 0;
+}
+
+/* ── Inspect: workspace (viewport + inspector) ──────────────────────── */
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: var(--s-lg);
+}
+
+.viewport-panel {
+  position: relative;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 40%, #1a1820 0%, #0a0a10 100%);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewport-panel img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.viewport-chip {
+  position: absolute;
+  top: var(--s-sm);
+  left: var(--s-sm);
+  background: rgba(28, 28, 38, .85);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  padding: 4px 10px;
+  backdrop-filter: blur(10px);
+  color: var(--ink-soft);
+  max-width: calc(100% - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-panel {
+  background: var(--surface-soft);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  padding: var(--s-lg);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ── Stat list (shared between Inspect and Match Look) ──────────────── */
+.stat-list {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px var(--s-sm);
+  margin: 0;
+}
+
+.stat-list dt {
+  font: 500 12px/1.4 var(--font-sans);
+  color: var(--slate);
+}
+
+.stat-list dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  text-align: right;
+}
+
+/* ── Match Look ──────────────────────────────────────────────────────── */
+.container-narrow {
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .field-row {
   display: flex;
-  gap: 1rem;
+  gap: var(--s-md);
   flex-wrap: wrap;
+  margin-bottom: var(--s-md);
 }
 
 .field-row label {
@@ -94,90 +204,48 @@ form label {
   min-width: 200px;
 }
 
-input[type="file"],
-select {
-  font-family: var(--font-sans);
-  font-size: 0.9rem;
-}
-
-button {
-  background: var(--color-accent);
-  color: var(--color-accent-text);
-  border: none;
-  border-radius: var(--radius);
-  padding: 0.55rem 1.1rem;
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-button:hover {
-  opacity: 0.9;
+form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font: 500 12px/1.4 var(--font-sans);
+  color: var(--slate);
+  margin-bottom: var(--s-md);
 }
 
 .status {
   min-height: 1.2rem;
-  color: var(--color-text-muted);
-  font-size: 0.9rem;
-  margin-bottom: 0.75rem;
+  color: var(--slate);
+  font-size: 13px;
+  margin: var(--s-sm) 0;
 }
 
 .thumb-row {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--s-sm);
   flex-wrap: wrap;
-  margin-bottom: 1rem;
+  margin-bottom: var(--s-lg);
 }
 
-.thumb-row figure,
-#inspect-output figure {
+.thumb-row figure {
   margin: 0;
   text-align: center;
 }
 
 .thumb-row img {
-  max-width: 200px;
-  max-height: 200px;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
+  max-width: 180px;
+  max-height: 180px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
   display: block;
+  background: var(--surface-sunken);
 }
 
-#inspect-preview {
-  max-width: 100%;
-  max-height: 320px;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
+.thumb-row figcaption {
+  margin-top: 4px;
 }
 
-figcaption {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-  margin-top: 0.25rem;
-}
-
-.report {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0.25rem 0.75rem;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-}
-
-.report dt {
-  color: var(--color-text-muted);
-}
-
-.report dd {
-  margin: 0;
-}
-
-.report dd.warn {
-  color: var(--color-warn);
-  font-weight: 600;
-}
-
-a#match-download {
-  display: inline-block;
-  margin-top: 0.75rem;
-  font-size: 0.9rem;
+a.btn {
+  text-decoration: none;
+  margin-top: var(--s-md);
 }
