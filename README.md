@@ -2,6 +2,8 @@
 
 A standalone tool for the print/retouching side of an AI image pipeline: color matching, masking, cropping, face retouching, dust removal, background replacement. Built after a production incident where files kept reaching retouching with inconsistent profiles and colors drifting warmer across repeated regenerations of the same image ("dérives chromatiques").
 
+![Inspect view showing a loaded image next to its real dimensions, bit depth, and ICC profile fields](assets/screenshot.png)
+
 Early stage. What's here right now: a shared image I/O layer, an acceptance-check utility, Match Look (the first of seven planned features), a local FastAPI service wrapping it, and a bare HTML/JS front end. Masking, AI crop, face retouch, dust removal, background replacement and snap-to-eye aren't built yet.
 
 ## How it works
