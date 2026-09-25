@@ -56,6 +56,7 @@ Ran it on a synthetic 6000x4000 16-bit file to get a real number instead of gues
 
 - [x] Shared I/O + acceptance checks
 - [x] Match Look
+- [ ] pywebview desktop shell around the current FastAPI + HTML UI
 - [ ] Shared segmentation backend (SAM3 + BiRefNet), feeds masking, AI crop, and background cutout
 - [ ] AI Crop
 - [ ] Retouch Faces
