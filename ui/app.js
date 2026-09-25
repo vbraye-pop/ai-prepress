@@ -13,7 +13,7 @@ function setupViewTabs() {
   const buttons = document.querySelectorAll("#view-tabs .pill-tab");
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
-      buttons.forEach((b) => b.dataset.active = "false");
+      buttons.forEach((b) => (b.dataset.active = "false"));
       document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
       button.dataset.active = "true";
       document.getElementById(`view-${button.dataset.view}`).classList.add("active");
@@ -22,39 +22,52 @@ function setupViewTabs() {
 }
 
 function setupInspect() {
-  const dropzone = document.getElementById("dropzone");
-  const fileInput = document.getElementById("inspect-file-input");
-  const workspace = document.getElementById("inspect-workspace");
-  const resetButton = document.getElementById("inspect-reset");
+  const placeholder = document.getElementById("inspect-placeholder");
+  const report = document.getElementById("inspect-report");
+  const exifBlock = document.getElementById("exif-block");
 
-  const runInspect = async (file) => {
-    if (!file) return;
+  const importer = createImageImport({
+    label: "Drop an image here",
+    hint: "or click to browse — TIFF, PNG, JPEG",
+    onFile: (file) => {
+      if (!file) {
+        placeholder.hidden = false;
+        report.hidden = true;
+        exifBlock.hidden = true;
+        return;
+      }
+      runInspect(file);
+    },
+  });
+  document.getElementById("inspect-import-mount").appendChild(importer.el);
+
+  async function runInspect(file) {
+    placeholder.hidden = true;
+    report.hidden = true;
+    exifBlock.hidden = true;
+    importer.setStatus("reading...");
 
     const body = new FormData();
     body.append("image", file);
-
-    dropzone.hidden = true;
-    workspace.hidden = false;
-    document.getElementById("inspect-filename").textContent = `reading ${file.name}...`;
 
     let response;
     try {
       response = await fetch("/api/inspect", { method: "POST", body });
     } catch (err) {
-      document.getElementById("inspect-filename").textContent = `request failed: ${err}`;
+      importer.setStatus(`request failed: ${err}`);
       return;
     }
 
     if (!response.ok) {
-      document.getElementById("inspect-filename").textContent = `server error: ${response.status}`;
+      importer.setStatus(`server error: ${response.status}`);
       return;
     }
 
     const info = await response.json();
-    document.getElementById("inspect-filename").textContent = file.name;
-    document.getElementById("inspect-preview").src = `/api/file/${info.file_id}/preview.png?t=${Date.now()}`;
+    importer.setStatus(null);
+    importer.setPreviewUrl(`/api/file/${info.file_id}/preview.png?t=${Date.now()}`);
 
-    renderReport(document.getElementById("inspect-report"), [
+    renderReport(report, [
       ["Dimensions", `${info.width} x ${info.height}`],
       ["Channels", info.channels],
       ["Dtype", info.dtype],
@@ -67,51 +80,39 @@ function setupInspect() {
       ["DPI", info.dpi ? info.dpi.map((v) => v.toFixed(0)).join(" x ") : "not set"],
       ["Compression", info.compression || "n/a"],
     ]);
+    report.hidden = false;
 
-    const exifBlock = document.getElementById("exif-block");
     const exifEntries = Object.entries(info.exif || {});
     if (exifEntries.length) {
       renderReport(document.getElementById("exif-report"), exifEntries);
       exifBlock.hidden = false;
-    } else {
-      exifBlock.hidden = true;
     }
-  };
-
-  dropzone.addEventListener("click", () => fileInput.click());
-  dropzone.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") fileInput.click();
-  });
-  fileInput.addEventListener("change", () => runInspect(fileInput.files[0]));
-
-  ["dragenter", "dragover"].forEach((eventName) => {
-    dropzone.addEventListener(eventName, (event) => {
-      event.preventDefault();
-      dropzone.dataset.drag = "true";
-    });
-  });
-  ["dragleave", "drop"].forEach((eventName) => {
-    dropzone.addEventListener(eventName, (event) => {
-      event.preventDefault();
-      dropzone.dataset.drag = "false";
-    });
-  });
-  dropzone.addEventListener("drop", (event) => {
-    const file = event.dataTransfer.files[0];
-    runInspect(file);
-  });
-
-  resetButton.addEventListener("click", () => {
-    workspace.hidden = true;
-    dropzone.hidden = false;
-    fileInput.value = "";
-  });
+  }
 }
 
 function setupMatchLook() {
   const form = document.getElementById("match-form");
+  const submitButton = document.getElementById("match-submit");
   const status = document.getElementById("match-status");
   const output = document.getElementById("match-output");
+
+  function refreshSubmitState() {
+    submitButton.disabled = !(targetImporter.getFile() && referenceImporter.getFile());
+  }
+
+  const targetImporter = createImageImport({
+    label: "Drop target image",
+    hint: "or click to browse",
+    onFile: refreshSubmitState,
+  });
+  document.getElementById("target-import-mount").appendChild(targetImporter.el);
+
+  const referenceImporter = createImageImport({
+    label: "Drop reference image",
+    hint: "or click to browse",
+    onFile: refreshSubmitState,
+  });
+  document.getElementById("reference-import-mount").appendChild(referenceImporter.el);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -119,8 +120,8 @@ function setupMatchLook() {
     output.hidden = true;
 
     const body = new FormData();
-    body.append("target", document.getElementById("target").files[0]);
-    body.append("reference", document.getElementById("reference").files[0]);
+    body.append("target", targetImporter.getFile());
+    body.append("reference", referenceImporter.getFile());
     body.append("method", document.getElementById("method").value);
 
     let response;
@@ -139,10 +140,7 @@ function setupMatchLook() {
     const result = await response.json();
     status.textContent = "done";
 
-    const bust = `?t=${Date.now()}`;
-    document.getElementById("target-preview").src = `/api/file/${result.target_id}/preview.png${bust}`;
-    document.getElementById("reference-preview").src = `/api/file/${result.reference_id}/preview.png${bust}`;
-    document.getElementById("result-preview").src = `/api/file/${result.result_id}/preview.png${bust}`;
+    document.getElementById("result-preview").src = `/api/file/${result.result_id}/preview.png?t=${Date.now()}`;
     document.getElementById("match-download").href = `/api/file/${result.result_id}/download`;
 
     renderReport(document.getElementById("match-report"), [

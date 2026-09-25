@@ -12,6 +12,7 @@
   />
   <link rel="stylesheet" href="tokens.css" />
   <link rel="stylesheet" href="components.css" />
+  <link rel="stylesheet" href="image-import.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -28,29 +29,14 @@
 
   <main>
     <section id="view-inspect" class="view active">
-      <div id="dropzone" class="dropzone" tabindex="0">
-        <input type="file" id="inspect-file-input" accept="image/png,image/jpeg,.tif,.tiff" hidden />
-        <div class="dropzone-content">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke-linecap="round" stroke-linejoin="round" />
-            <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <p class="t-h5">Drop an image here</p>
-          <p class="t-caption">or click to browse — TIFF, PNG, JPEG</p>
-        </div>
-      </div>
-
-      <div id="inspect-workspace" class="workspace" hidden>
-        <div class="viewport-panel">
-          <div class="viewport-chip t-cap-bold" id="inspect-filename"></div>
-          <img id="inspect-preview" alt="inspected image" />
-        </div>
+      <div class="workspace">
+        <div id="inspect-import-mount" class="viewport-slot"></div>
         <aside class="inspector-panel">
           <div class="inspector-head">
             <span class="t-eyebrow">Stats</span>
-            <button id="inspect-reset" class="btn btn-ghost">Inspect another</button>
           </div>
-          <dl id="inspect-report" class="stat-list"></dl>
+          <p id="inspect-placeholder" class="t-caption">Import an image to see its stats.</p>
+          <dl id="inspect-report" class="stat-list" hidden></dl>
           <div id="exif-block" hidden>
             <div class="divider"></div>
             <span class="t-eyebrow">EXIF</span>
@@ -64,8 +50,14 @@
       <div class="container-narrow">
         <form id="match-form" class="card">
           <div class="field-row">
-            <label>Target <input class="input" type="file" id="target" required /></label>
-            <label>Reference <input class="input" type="file" id="reference" required /></label>
+            <div class="importer-slot">
+              <span class="t-eyebrow">Target</span>
+              <div id="target-import-mount" class="importer-box"></div>
+            </div>
+            <div class="importer-slot">
+              <span class="t-eyebrow">Reference</span>
+              <div id="reference-import-mount" class="importer-box"></div>
+            </div>
           </div>
           <label>Method
             <select class="input" id="method">
@@ -73,17 +65,16 @@
               <option value="reinhard">Reinhard (mean/std)</option>
             </select>
           </label>
-          <button type="submit" class="btn btn-primary">Run match look</button>
+          <button type="submit" class="btn btn-primary" id="match-submit" disabled>Run match look</button>
         </form>
 
         <div id="match-status" class="status"></div>
 
         <div id="match-output" class="card" hidden>
-          <div class="thumb-row">
-            <figure><img id="target-preview" alt="target" /><figcaption class="t-caption">target</figcaption></figure>
-            <figure><img id="reference-preview" alt="reference" /><figcaption class="t-caption">reference</figcaption></figure>
-            <figure><img id="result-preview" alt="result" /><figcaption class="t-caption">result</figcaption></figure>
-          </div>
+          <figure class="result-figure">
+            <img id="result-preview" alt="result" />
+            <figcaption class="t-caption">result</figcaption>
+          </figure>
           <dl id="match-report" class="stat-list"></dl>
           <a id="match-download" class="btn btn-secondary" href="#">Download full-precision TIFF</a>
         </div>
@@ -91,6 +82,7 @@
     </section>
   </main>
 
+  <script src="image-import.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
