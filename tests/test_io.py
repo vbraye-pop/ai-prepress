@@ -55,3 +55,16 @@ def test_png_round_trip_is_8bit_only_by_design(tmp_path):
 
     with pytest.raises(ValueError, match="only supports 8-bit"):
         save(_linear_ramp_16bit(), tmp_path / "should_fail.png", icc_profile=profile)
+
+
+def test_webp_round_trip_is_lossless_and_keeps_profile(tmp_path):
+    profile = _wide_gamut_profile()
+    source = (_linear_ramp_16bit() // 257).astype(np.uint8)
+    out = tmp_path / "roundtrip.webp"
+
+    save(source, out, icc_profile=profile)
+    reloaded = load(out)
+
+    assert reloaded.array.dtype == np.uint8
+    assert reloaded.icc_profile == profile
+    assert np.array_equal(reloaded.array, source)  # lossless, not the default WebP mode

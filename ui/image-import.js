@@ -2,12 +2,12 @@
  * inline preview once a file is picked, with replace/remove affordances -
  * used everywhere this app needs to bring in an image, instead of each
  * screen rolling its own file input. Local object-URL preview for formats
- * the browser can render natively (PNG/JPEG); TIFF gets a placeholder icon
- * until the caller supplies a server-rendered preview via setPreviewUrl().
+ * the browser can render natively (PNG/JPEG/WebP); TIFF gets a placeholder
+ * icon until the caller supplies a server-rendered preview via setPreviewUrl().
  */
 
-const ACCEPTED_EXTENSIONS = [".png", ".jpg", ".jpeg", ".tif", ".tiff"];
-const NATIVELY_PREVIEWABLE = /\.(png|jpe?g)$/i;
+const ACCEPTED_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"];
+const NATIVELY_PREVIEWABLE = /\.(png|jpe?g|webp)$/i;
 
 function isAcceptedFile(file) {
   const name = file.name.toLowerCase();
@@ -40,7 +40,7 @@ const ICONS = {
 
 function createImageImport({
   label = "Drop an image here",
-  hint = "or click to browse — TIFF, PNG, JPEG",
+  hint = "or click to browse — TIFF, PNG, JPEG, WebP",
   onFile,
 } = {}) {
   const root = document.createElement("div");
@@ -49,7 +49,7 @@ function createImageImport({
   root.tabIndex = 0;
 
   root.innerHTML = `
-    <input type="file" class="ii-input" accept="image/png,image/jpeg,.tif,.tiff" hidden />
+    <input type="file" class="ii-input" accept="image/png,image/jpeg,image/webp,.tif,.tiff" hidden />
 
     <div class="ii-empty">
       <div class="ii-icon">${ICONS.upload}</div>

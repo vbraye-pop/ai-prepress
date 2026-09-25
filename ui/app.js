@@ -28,7 +28,7 @@ function setupInspect() {
 
   const importer = createImageImport({
     label: "Drop an image here",
-    hint: "or click to browse — TIFF, PNG, JPEG",
+    hint: "or click to browse — TIFF, PNG, JPEG, WebP",
     onFile: (file) => {
       if (!file) {
         placeholder.hidden = false;

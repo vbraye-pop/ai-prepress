@@ -41,3 +41,14 @@ def test_png_reports_dpi_and_exif(tmp_path):
     assert info.bit_depth == 8
     assert info.dpi == pytest.approx((150.0, 150.0), abs=0.1)  # PNG stores DPI as a rational approximation
     assert info.looks_upsampled_from_8bit is False
+
+
+def test_webp_dispatches_through_the_pil_path(tmp_path):
+    array = np.random.default_rng(2).integers(0, 255, size=(15, 25, 3), dtype=np.uint8)
+    path = tmp_path / "test.webp"
+    Image.fromarray(array).save(path, lossless=True)
+
+    info = describe(path)
+
+    assert (info.width, info.height, info.channels) == (25, 15, 3)
+    assert info.bit_depth == 8

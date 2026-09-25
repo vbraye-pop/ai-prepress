@@ -11,7 +11,7 @@ reproducing, so it gets tested directly (see tests/test_io.py).
 Pillow can't hold a 16-bit RGB array at all (fromarray raises on
 (H, W, 3) uint16 - checked directly, it's not a documentation gap).
 TIFF via tifffile is the only path that keeps full bit depth, so it's the
-working format here. PNG/JPEG via Pillow are accepted for 8-bit-only
+working format here. PNG/JPEG/WebP via Pillow are accepted for 8-bit-only
 input/output.
 """
 
@@ -28,7 +28,7 @@ from PIL import Image, ImageCms
 ICC_TAG = 34675  # TIFFTAG_ICCPROFILE
 
 TIFF_EXTS = {".tif", ".tiff"}
-PIL_EXTS = {".png", ".jpg", ".jpeg"}
+PIL_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 @dataclass
@@ -91,7 +91,10 @@ def save(image: LoadedImage | np.ndarray, path: str | Path, icc_profile: bytes |
     if ext in PIL_EXTS:
         if array.dtype != np.uint8:
             raise ValueError(f"{ext} only supports 8-bit output - save as .tiff to keep {array.dtype}")
-        Image.fromarray(array).save(path, icc_profile=icc_profile)
+        # WebP defaults to lossy in Pillow - unlike JPEG it has a real lossless mode,
+        # so there's no reason to take the lossy path here
+        extra = {"lossless": True} if ext == ".webp" else {}
+        Image.fromarray(array).save(path, icc_profile=icc_profile, **extra)
         return
 
     raise ValueError(f"unsupported extension: {ext}")
