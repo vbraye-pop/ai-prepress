@@ -13,6 +13,7 @@ dependencies = [
     "colour-science>=0.4.5",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
 ]
 
 [dependency-groups]

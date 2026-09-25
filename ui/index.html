@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ai-prepress</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <h1>ai-prepress &mdash; match look</h1>
+  <p>Pick a target image and a reference image. The reference's color statistics get applied to the target.</p>
+
+  <form id="match-form">
+    <label>Target <input type="file" id="target" required /></label>
+    <label>Reference <input type="file" id="reference" required /></label>
+    <label>Method
+      <select id="method">
+        <option value="mkl">MKL (full covariance)</option>
+        <option value="reinhard">Reinhard (mean/std)</option>
+      </select>
+    </label>
+    <button type="submit">Run</button>
+  </form>
+
+  <div id="status"></div>
+
+  <div id="output" hidden>
+    <img id="preview" alt="result preview" />
+    <dl id="report"></dl>
+    <a id="download" href="#">Download full-precision TIFF</a>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
