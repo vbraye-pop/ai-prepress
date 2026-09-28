@@ -154,20 +154,39 @@
           <div class="inspector-head">
             <span class="t-eyebrow">Retouch Faces</span>
           </div>
-          <div class="slider-row">
-            <label for="retouch-dark-circles" class="t-caption">Dark circles</label>
-            <input type="range" id="retouch-dark-circles" min="0" max="100" value="0" />
-          </div>
-          <div class="slider-row">
-            <label for="retouch-even-skin" class="t-caption">Even skin</label>
-            <input type="range" id="retouch-even-skin" min="0" max="100" value="0" />
-          </div>
-          <div class="slider-row">
-            <label for="retouch-contouring" class="t-caption">Contouring</label>
-            <input type="range" id="retouch-contouring" min="0" max="100" value="0" />
-          </div>
           <div id="retouch-status" class="status"></div>
-          <p id="retouch-placeholder" class="t-caption">Set at least one slider above 0, then apply.</p>
+          <p id="retouch-placeholder" class="t-caption">Import a portrait to detect faces.</p>
+
+          <ul id="retouch-face-list" class="legend-list" hidden></ul>
+
+          <div id="retouch-controls" hidden>
+            <div class="slider-row">
+              <label for="retouch-dark-circles" class="t-caption">Dark circles</label>
+              <input type="range" id="retouch-dark-circles" min="0" max="100" value="0" />
+            </div>
+            <div class="slider-row">
+              <label for="retouch-even-skin" class="t-caption">Even skin - amount</label>
+              <input type="range" id="retouch-even-skin" min="0" max="100" value="0" />
+            </div>
+            <div class="slider-row">
+              <label for="retouch-even-skin-texture" class="t-caption">Even skin - texture</label>
+              <input type="range" id="retouch-even-skin-texture" min="-100" max="100" value="0" />
+            </div>
+            <div class="slider-row">
+              <label for="retouch-contouring" class="t-caption">Contouring</label>
+              <input type="range" id="retouch-contouring" min="0" max="100" value="0" />
+            </div>
+            <div class="divider"></div>
+            <div class="slider-row">
+              <label for="retouch-feather" class="t-caption">Mask feather</label>
+              <input type="range" id="retouch-feather" min="0" max="200" value="100" />
+            </div>
+            <div class="slider-row">
+              <label for="retouch-edge" class="t-caption">Mask edge (erode/dilate)</label>
+              <input type="range" id="retouch-edge" min="-100" max="100" value="0" />
+            </div>
+          </div>
+
           <dl id="retouch-report" class="stat-list" hidden></dl>
           <a id="retouch-download" class="btn btn-secondary" href="#" hidden>Download full-precision TIFF</a>
         </aside>

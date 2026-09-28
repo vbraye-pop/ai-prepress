@@ -112,7 +112,7 @@ Region index groups (`FACE_OVAL`, eye/lip loops, eyebrows) are walked from media
 
 ## Retouch Faces
 
-The masks above feeding into an actual edit: `ai_prepress.features.retouch_faces` does classical frequency separation - split the image into a low-frequency (LF, tone/shading) layer and a high-frequency (HF, texture/pores) layer, edit LF only inside a region mask, recombine with the untouched HF layer. The HF layer never being touched is what makes "waxy skin" impossible by construction, not something hoped for from a generative model. Covers 3 of Capture One's 4 sub-tools this way - Dark Circles (brightens the under-eye band), Even Skin (blends skin tone toward a locally-smoothed version of itself, not a single flat mean - see the module docstring for why that distinction mattered in practice), and Contouring (darkens the cheek region; this one's the crudest of the three, a plain darken slider, not real lighting-aware shading the way Capture One's own copy describes it). Blemish removal isn't here - it needs actual inpainting, a different kind of model this project doesn't have wired up yet.
+The masks above feeding into an actual edit: `ai_prepress.features.retouch_faces` does classical frequency separation - split the image into a low-frequency (LF, tone/shading) layer and a high-frequency (HF, texture/pores) layer, edit LF only inside a region mask, recombine with the HF layer. HF stays untouched for Dark Circles and Contouring (what makes "waxy skin" impossible by construction, not something hoped for from a generative model); Even Skin's Texture control is a deliberate exception - see below. Blemish removal isn't here - it needs actual inpainting, a different kind of model this project doesn't have wired up yet. Built against a research pass across Capture One's own documentation, Retouch4me, Lightroom Classic's masking architecture, and the manual Photoshop frequency-separation workflow professional retouchers already use - see the "face-parsing-vs-landmarks-pivot" project note for the full findings.
 
 ```python
 from ai_prepress.io import load
@@ -120,12 +120,19 @@ from ai_prepress.features.retouch_faces import retouch_faces, RetouchStrengths
 
 image = load("portrait.tiff")
 result = retouch_faces(image, RetouchStrengths(dark_circles=0.5, even_skin=0.4, contouring=0.3))
-# None if no face detected
+# None if no face detected. A plain RetouchStrengths applies to every detected face; pass
+# {0: RetouchStrengths(...), 1: RetouchStrengths(...)} for independent per-face control.
 ```
 
-No scipy, and PIL's `GaussianBlur` flatly refuses float-mode images (confirmed by hand, not assumed) - routing 16-bit data through it would mean quantizing to 8-bit first, so the LF/HF split runs on a from-scratch separable box-blur approximation operating directly on the same float64 arrays the rest of the pipeline uses. Mask edges are feathered (a hard polygon edge on a brightened region looks like a sticker) using the same blur.
+**Controls**, confirmed against Capture One's own Skin Tools panel rather than guessed:
+- **Dark circles / Even skin / Contouring** - 0-1 strength, as before.
+- **Even skin - Texture** (`even_skin_texture`, -1..1) - Capture One's Even Skin panel has both Amount and a separate signed Texture slider; negative pushes extra flattening beyond Amount alone (their own example, "80 Amount / -70 Texture", is described as an editorial-polish look), positive mildly restores detail. This scales the HF layer within the even_skin mask specifically - the one place HF is ever touched.
+- **Mask feather / edge** (`feather_amount`, `edge_amount`) - Lightroom Classic's own mask "Reshape" step (Feather + Edge) is the cheap fix for "the AI-derived region is a bit off" before a full paint brush, which this project doesn't have yet. `edge_amount` erodes (negative) or dilates (positive) a region's boundary via an exact separable min/max filter, capped at half an eye-width so an extreme value shrinks a region without a one-click "mask disappeared" trap.
+- **Multi-face** - every competitor researched treats this as core. `detect_landmarks(rgb, max_faces=N)` returns every detected face, sorted left-to-right for stable indexing.
 
-**Retouch Faces tab in the UI**: upload a portrait, set at least one strength slider, Apply retouch. Shows original next to retouched side by side (same before/after pattern as Match Look), plus the same acceptance-check stats (Delta-E, bit depth, ICC profile) Match Look surfaces, and a full-precision TIFF download.
+No scipy, and PIL's `GaussianBlur` flatly refuses float-mode images (confirmed by hand, not assumed) - routing 16-bit data through it would mean quantizing to 8-bit first, so the LF/HF split runs on a from-scratch separable box-blur approximation operating directly on the same float64 arrays the rest of the pipeline uses. Mask edges are feathered (a hard polygon edge on a brightened region looks like a sticker) using the same blur; erode/dilate uses a separate exact min/max filter (a rectangle is the Minkowski sum of a horizontal and vertical segment, so one pass per axis is exact, not an approximation).
+
+**Retouch Faces tab in the UI**: upload a portrait - every detected face is listed (with a cropped thumbnail) alongside an "All faces" row. Select a row to edit that face's (or everyone's) sliders independently; once any individual face is customized, "All faces" greys out rather than silently dropping whatever was set there, since the API sends either one broadcast strengths object or an explicit per-face map, never both at once. Shows original next to retouched side by side (same before/after pattern as Match Look), plus the same acceptance-check stats (Delta-E, bit depth, ICC profile) Match Look surfaces, and a full-precision TIFF download.
 
 ## Roadmap
 

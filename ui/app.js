@@ -417,6 +417,13 @@ function setupFaceRegions() {
   });
 }
 
+// one strength value per slider key, all sliders default to their existing behavior's neutral
+// point (0 for the four effect strengths, 1x/0 for feather/edge - matching RetouchStrengths'
+// own Python-side dataclass defaults exactly, see retouch_faces.py)
+function defaultRetouchStrengths() {
+  return { dark_circles: 0, even_skin: 0, even_skin_texture: 0, contouring: 0, feather_amount: 1, edge_amount: 0 };
+}
+
 function setupRetouchFaces() {
   const submitButton = document.getElementById("retouch-submit");
   const changePhotoButton = document.getElementById("retouch-change-photo");
@@ -426,50 +433,213 @@ function setupRetouchFaces() {
   const resultPair = document.getElementById("retouch-result-pair");
   const report = document.getElementById("retouch-report");
   const downloadLink = document.getElementById("retouch-download");
-  const darkCirclesSlider = document.getElementById("retouch-dark-circles");
-  const evenSkinSlider = document.getElementById("retouch-even-skin");
-  const contouringSlider = document.getElementById("retouch-contouring");
+  const faceList = document.getElementById("retouch-face-list");
+  const controls = document.getElementById("retouch-controls");
+
+  // slider UI ranges aren't all 0-100 the same way (even_skin_texture and edge_amount are
+  // signed, feather_amount is a 0-200 percentage of the existing default) - one scale table
+  // instead of repeating the conversion at every call site
+  const sliders = {
+    dark_circles: document.getElementById("retouch-dark-circles"),
+    even_skin: document.getElementById("retouch-even-skin"),
+    even_skin_texture: document.getElementById("retouch-even-skin-texture"),
+    contouring: document.getElementById("retouch-contouring"),
+    feather_amount: document.getElementById("retouch-feather"),
+    edge_amount: document.getElementById("retouch-edge"),
+  };
+  const SLIDER_SCALE = { dark_circles: 100, even_skin: 100, even_skin_texture: 100, contouring: 100, feather_amount: 100, edge_amount: 100 };
+
+  let fileId = null;
+  let faceCount = 0;
+  let facesData = []; // raw /api/face-regions "faces" array (face_index, bbox, regions)
+  let sourceImage = null; // preview image, cropped client-side for face-list thumbnails
+  let selectedTarget = "all"; // "all" | a face_index number
+  let usedPerFace = false; // did the user ever touch an individual face's sliders
+  let strengthsByTarget = { all: defaultRetouchStrengths() };
+
+  function currentStrengths() {
+    return strengthsByTarget[selectedTarget];
+  }
+
+  function loadSlidersFromCurrentTarget() {
+    const s = currentStrengths();
+    for (const [key, slider] of Object.entries(sliders)) {
+      slider.value = Math.round(s[key] * SLIDER_SCALE[key]);
+    }
+  }
 
   function refreshSubmitState() {
-    const anyStrength = [darkCirclesSlider, evenSkinSlider, contouringSlider].some((s) => Number(s.value) > 0);
-    submitButton.disabled = !(importer.getFile() && anyStrength);
+    submitButton.disabled = !(fileId && faceCount > 0);
+  }
+
+  function resetDetectionState() {
+    fileId = null;
+    faceCount = 0;
+    facesData = [];
+    sourceImage = null;
+    selectedTarget = "all";
+    usedPerFace = false;
+    strengthsByTarget = { all: defaultRetouchStrengths() };
+
+    mount.hidden = false;
+    faceList.hidden = true;
+    faceList.innerHTML = "";
+    controls.hidden = true;
+    resultPair.hidden = true;
+    changePhotoButton.hidden = true;
+    report.hidden = true;
+    downloadLink.hidden = true;
+    placeholder.hidden = false;
+    status.textContent = "";
+    refreshSubmitState();
+  }
+
+  function cropThumbnail(bbox) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 40;
+    canvas.height = 40;
+    const ctx = canvas.getContext("2d");
+    const [[x0, y0], [x1, y1]] = bbox;
+    const w = Math.max(1, x1 - x0);
+    const h = Math.max(1, y1 - y0);
+    const pad = 0.2; // a little room around the face oval, not a razor-tight crop
+    const sx = Math.max(0, x0 - w * pad);
+    const sy = Math.max(0, y0 - h * pad);
+    const sw = Math.min(sourceImage.naturalWidth - sx, w * (1 + 2 * pad));
+    const sh = Math.min(sourceImage.naturalHeight - sy, h * (1 + 2 * pad));
+    ctx.drawImage(sourceImage, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL();
+  }
+
+  function highlightSelectedRow() {
+    faceList.querySelectorAll(".legend-item").forEach((item) => {
+      item.style.background = item.dataset.target === String(selectedTarget) ? "var(--surface-raised)" : "";
+      item.style.opacity = item.dataset.target === "all" && usedPerFace ? "0.4" : "1";
+    });
+  }
+
+  function renderFaceList() {
+    const allRow = `
+      <li class="legend-item" data-target="all">
+        <label><span class="legend-swatch" style="background: var(--primary)"></span><span class="legend-name">All faces</span></label>
+      </li>`;
+    const faceRows = facesData.map(
+      (face) => `
+      <li class="legend-item" data-target="${face.face_index}">
+        <label>
+          <img class="legend-thumb" src="${cropThumbnail(face.bbox)}" alt="" />
+          <span class="legend-name">Face ${face.face_index + 1}</span>
+        </label>
+      </li>`
+    );
+    faceList.innerHTML = [allRow, ...faceRows].join("");
+    faceList.hidden = false;
+
+    faceList.querySelectorAll(".legend-item").forEach((item) => {
+      item.addEventListener("click", () => {
+        const target = item.dataset.target;
+        if (target === "all" && usedPerFace) {
+          // once any individual face has been customized, "All faces" edits would silently be
+          // dropped at submit time (the API sends either an all_faces broadcast or a per_face
+          // map, never both) - refusing the click here is clearer than a silent no-op later
+          status.textContent = "per-face settings are active for this photo - edit individual faces, or Change photo to start over";
+          return;
+        }
+        selectedTarget = target === "all" ? "all" : Number(target);
+        loadSlidersFromCurrentTarget();
+        highlightSelectedRow();
+      });
+    });
+    highlightSelectedRow();
+  }
+
+  async function detectFaces(file) {
+    status.textContent = "detecting faces...";
+
+    const body = new FormData();
+    body.append("image", file);
+    let response;
+    try {
+      response = await fetch("/api/face-regions", { method: "POST", body });
+    } catch (err) {
+      status.textContent = `request failed: ${err}`;
+      return;
+    }
+    if (!response.ok) {
+      status.textContent = `server error: ${response.status}`;
+      return;
+    }
+
+    const result = await response.json();
+    fileId = result.file_id;
+    faceCount = result.face_count;
+    facesData = result.faces;
+    refreshSubmitState();
+
+    if (faceCount === 0) {
+      status.textContent = "no face detected in this image";
+      return;
+    }
+
+    strengthsByTarget = { all: defaultRetouchStrengths() };
+    for (let i = 0; i < faceCount; i++) strengthsByTarget[i] = defaultRetouchStrengths();
+    selectedTarget = "all";
+    usedPerFace = false;
+
+    try {
+      sourceImage = await loadImage(`/api/file/${fileId}/preview.jpg?t=${Date.now()}`);
+    } catch (err) {
+      status.textContent = `couldn't load the preview: ${err}`;
+      return;
+    }
+
+    placeholder.hidden = true;
+    renderFaceList();
+    controls.hidden = false;
+    loadSlidersFromCurrentTarget();
+    status.textContent = faceCount === 1 ? "1 face detected" : `${faceCount} faces detected`;
   }
 
   const importer = createImageImport({
     label: "Drop a portrait here",
     hint: "or click to browse",
-    onFile: refreshSubmitState,
+    onFile: (file) => {
+      resetDetectionState();
+      if (file) detectFaces(file);
+    },
   });
   mount.appendChild(importer.el);
 
-  [darkCirclesSlider, evenSkinSlider, contouringSlider].forEach((slider) =>
-    slider.addEventListener("input", refreshSubmitState)
-  );
-
-  changePhotoButton.addEventListener("click", () => {
-    mount.hidden = false;
-    resultPair.hidden = true;
-    changePhotoButton.hidden = true;
+  Object.entries(sliders).forEach(([key, slider]) => {
+    slider.addEventListener("input", () => {
+      currentStrengths()[key] = Number(slider.value) / SLIDER_SCALE[key];
+      if (selectedTarget !== "all" && !usedPerFace) {
+        usedPerFace = true;
+        highlightSelectedRow(); // grey out "All faces" now that it's a dead end for this photo
+      }
+    });
   });
 
+  changePhotoButton.addEventListener("click", () => importer.reset());
+
   submitButton.addEventListener("click", async () => {
-    const file = importer.getFile();
-    if (!file) return;
+    if (!fileId || faceCount === 0) return;
 
     status.textContent = "retouching...";
-    placeholder.hidden = true;
     report.hidden = true;
     downloadLink.hidden = true;
 
-    const body = new FormData();
-    body.append("image", file);
-    body.append("dark_circles", Number(darkCirclesSlider.value) / 100);
-    body.append("even_skin", Number(evenSkinSlider.value) / 100);
-    body.append("contouring", Number(contouringSlider.value) / 100);
+    const payload = usedPerFace
+      ? { file_id: fileId, mode: "per_face", per_face: Object.fromEntries(Array.from({ length: faceCount }, (_, i) => [i, strengthsByTarget[i]])) }
+      : { file_id: fileId, mode: "all_faces", strengths: strengthsByTarget.all };
 
     let response;
     try {
-      response = await fetch("/api/retouch-faces", { method: "POST", body });
+      response = await fetch("/api/retouch-faces/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
     } catch (err) {
       status.textContent = `request failed: ${err}`;
       return;

@@ -269,6 +269,14 @@ a.btn {
   flex: 0 0 auto;
 }
 
+.legend-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+
 .legend-count {
   font-family: var(--font-mono);
   font-size: 12px;
