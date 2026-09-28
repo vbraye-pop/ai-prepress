@@ -87,23 +87,81 @@ def _gaussian_blur(arr: np.ndarray, sigma: float) -> np.ndarray:
     return result
 
 
+def _box_extreme_1d(arr: np.ndarray, radius: int, axis: int, op: str) -> np.ndarray:
+    """Exact min/max filter over a size-(2*radius+1) window along one axis - the raster
+    primitive behind erode ('erode') and dilate ('dilate'). Grayscale erosion/dilation by a
+    rectangle is separable (a rectangle is the Minkowski sum of a horizontal and a vertical
+    segment), so one pass per axis is an EXACT result for a rectangular structuring element, not
+    an approximation the way _gaussian_blur's multi-pass box trick approximates a Gaussian - the
+    known limitation is isotropy, not exactness: a square structuring element grows a shape's
+    corners by radius*sqrt(2) versus radius on an axis-aligned edge, immaterial on the organic
+    polygon shapes this module produces. Implemented as a direct windowed reduction rather than
+    an O(log radius) doubling scheme - this only runs once per Apply click, not per slider drag,
+    so the simpler, more obviously-correct version was chosen over the faster one."""
+    if radius <= 0:
+        return arr
+    pad = [(0, 0)] * arr.ndim
+    pad[axis] = (radius, radius)
+    padded = np.pad(arr, pad, mode="edge")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, window_shape=2 * radius + 1, axis=axis)
+    reducer = np.max if op == "dilate" else np.min
+    return reducer(windows, axis=-1)
+
+
+def _reshape_mask(mask01: np.ndarray, edge_px: float) -> np.ndarray:
+    """edge_px > 0 dilates (grows the region), < 0 erodes (shrinks it), 0 is an exact no-op -
+    that exactness matters, since RetouchStrengths()'s zero-strength no-op test depends on
+    defaults reproducing today's output bit-for-bit."""
+    radius = round(abs(edge_px))
+    if radius == 0:
+        return mask01
+    op = "dilate" if edge_px > 0 else "erode"
+    result = mask01
+    for axis in (0, 1):
+        result = _box_extreme_1d(result, radius, axis, op)
+    return result
+
+
 def rasterize_mask(
-    polygon: np.ndarray, shape: tuple[int, int], cutouts: list[np.ndarray] | None = None, feather: float = 0.0
+    polygon: np.ndarray,
+    shape: tuple[int, int],
+    cutouts: list[np.ndarray] | None = None,
+    feather: float = 0.0,
+    edge: float = 0.0,
 ) -> np.ndarray:
     """Polygon(s) -> a (H, W) float mask in [0, 1]. Drawn via PIL at full resolution (mask
     shapes are fine through PIL - it's pixel VALUES that can't round-trip through it, see the
-    module docstring). Cutouts are painted out afterward rather than via an even-odd fill rule,
-    since PIL's ImageDraw.polygon doesn't support one. `feather` is a blur sigma in pixels
-    applied to the hard-edged mask - a hard polygon edge on a brightened region looks like a
-    sticker cutout once composited, feathering is not optional polish."""
+    module docstring).
+
+    Order matters here: outer fill -> edge (erode/dilate) -> cutouts -> feather. Reshaping the
+    mask AFTER cutouts were already removed would let a dilate grow back into the eyes/lips a
+    cutout was deliberately excluding - cutouts are always applied at full strength, unaffected
+    by edge, which is why they're a separate raster subtracted afterward rather than being drawn
+    directly into the same image the way the very first version of this function did.
+
+    `feather` is a blur sigma in pixels applied to the hard mask edge - a hard polygon edge on a
+    brightened region looks like a sticker cutout once composited, feathering is not optional
+    polish. `edge` is a signed pixel offset for growing/shrinking the region boundary itself
+    (see _reshape_mask) - Lightroom Classic's own "Reshape" mask tool exposes exactly this pair
+    (their Feather/Edge sliders) as the cheap fix for "the AI mask is wrong" before a full paint
+    brush, which this project doesn't have yet."""
     height, width = shape
     mask_img = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(mask_img)
     draw.polygon([tuple(p) for p in polygon], fill=255)
-    for cutout in cutouts or []:
-        draw.polygon([tuple(p) for p in cutout], fill=0)
-
     mask = np.asarray(mask_img, dtype=np.float64) / 255.0
+
+    if edge != 0:
+        mask = _reshape_mask(mask, edge)
+
+    if cutouts:
+        cutout_img = Image.new("L", (width, height), 0)
+        cutout_draw = ImageDraw.Draw(cutout_img)
+        for cutout in cutouts:
+            cutout_draw.polygon([tuple(p) for p in cutout], fill=255)
+        cutout_mask = np.asarray(cutout_img, dtype=np.float64) / 255.0
+        mask = mask * (1.0 - cutout_mask)
+
     if feather > 0:
         mask = _gaussian_blur(mask, feather)
     return mask
@@ -119,11 +177,26 @@ class RetouchStrengths:
     # "80 Amount / -70 Texture", is described as an editorial-polish look), positive mildly
     # boosts it back (capped well short of oversharpening - see _texture_multiplier).
     contouring: float = 0.0  # 0-1, darken cheek - the crudest of the three, see module docstring
+    feather_amount: float = 1.0  # multiplier on the region-proportional feather radius below,
+    # 1.0 reproduces today's exact fixed value, 0 is a hard edge, >1 softer - Lightroom Classic's
+    # own mask "Reshape" step exposes this as a user-facing slider rather than a fixed constant.
+    edge_amount: float = 0.0  # -1..1, negative erodes / positive dilates every active region's
+    # mask boundary (one shared value, same pattern feather already uses rather than a field per
+    # effect) - the cheap fix for "the AI-derived region is a bit off" without needing a brush.
 
 
 def _feather_radius(landmarks: FaceLandmarks) -> float:
     eye_width = np.linalg.norm(landmarks.subset([33])[0] - landmarks.subset([133])[0])
     return max(1.0, eye_width * 0.12)
+
+
+def _edge_offset_px(landmarks: FaceLandmarks, amount: float) -> float:
+    """Mirrors _feather_radius: proportional to the face's own scale (eye width), not image
+    resolution or a raw pixel count, so the same slider value means the same relative reshape
+    regardless of photo size. Capped at half an eye-width so the slider's extreme erodes a
+    region visibly without being a one-click "the mask disappeared" trap."""
+    eye_width = np.linalg.norm(landmarks.subset([33])[0] - landmarks.subset([133])[0])
+    return eye_width * 0.5 * np.clip(amount, -1.0, 1.0)
 
 
 def _apply_dark_circles(lf: np.ndarray, mask: np.ndarray, strength: float) -> np.ndarray:
@@ -185,7 +258,8 @@ def retouch_faces(image: LoadedImage, strengths: RetouchStrengths) -> LoadedImag
 
     height, width = unit.shape[:2]
     face_width = np.linalg.norm(landmarks.subset([234])[0] - landmarks.subset([454])[0])
-    feather = _feather_radius(landmarks)
+    feather = _feather_radius(landmarks) * strengths.feather_amount
+    edge = _edge_offset_px(landmarks, strengths.edge_amount)
 
     lf_sigma = max(2.0, face_width * 0.05)
     lf = _gaussian_blur(unit, lf_sigma)
@@ -194,12 +268,12 @@ def retouch_faces(image: LoadedImage, strengths: RetouchStrengths) -> LoadedImag
 
     if strengths.dark_circles > 0:
         for side in ("right", "left"):
-            mask = rasterize_mask(under_eye_band(landmarks, side), (height, width), feather=feather)
+            mask = rasterize_mask(under_eye_band(landmarks, side), (height, width), feather=feather, edge=edge)
             lf = _apply_dark_circles(lf, mask, strengths.dark_circles)
 
     if strengths.even_skin > 0:
         oval, cutouts = skin_region(landmarks)
-        mask = rasterize_mask(oval, (height, width), cutouts=cutouts, feather=feather * 1.5)
+        mask = rasterize_mask(oval, (height, width), cutouts=cutouts, feather=feather * 1.5, edge=edge)
         regional = _masked_regional_blur(lf, mask, sigma=lf_sigma * 4)
         lf = _apply_even_skin(lf, mask, strengths.even_skin, regional)
         if strengths.even_skin_texture != 0:
@@ -207,7 +281,7 @@ def retouch_faces(image: LoadedImage, strengths: RetouchStrengths) -> LoadedImag
 
     if strengths.contouring > 0:
         for side in ("right", "left"):
-            mask = rasterize_mask(cheek_region(landmarks, side), (height, width), feather=feather)
+            mask = rasterize_mask(cheek_region(landmarks, side), (height, width), feather=feather, edge=edge)
             lf = _apply_contouring(lf, mask, strengths.contouring)
 
     result_unit = np.clip(lf + hf * hf_multiplier[..., None], 0.0, 1.0)

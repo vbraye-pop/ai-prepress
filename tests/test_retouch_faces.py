@@ -6,7 +6,9 @@ from ai_prepress.face_landmarks import FaceLandmarks
 from ai_prepress.features.retouch_faces import (
     RetouchStrengths,
     _box_blur_1d,
+    _box_extreme_1d,
     _gaussian_blur,
+    _reshape_mask,
     rasterize_mask,
     retouch_faces,
 )
@@ -40,6 +42,46 @@ def test_rasterize_mask_cutout_removes_a_hole():
     mask = rasterize_mask(outer, shape=(100, 100), cutouts=[hole], feather=0)
     assert mask[50, 50] == pytest.approx(0.0)  # inside the hole
     assert mask[20, 20] == pytest.approx(1.0)  # inside the outer shape, outside the hole
+
+
+def test_box_extreme_1d_dilate_grows_and_erode_shrinks_a_block():
+    arr = np.zeros((1, 21))
+    arr[0, 10] = 1.0
+    dilated = _box_extreme_1d(arr, radius=3, axis=1, op="dilate")
+    assert dilated[0, 7:14].sum() == 7  # grew to a 7-wide block of 1s
+
+    block = np.zeros((1, 21))
+    block[0, 5:16] = 1.0  # 11-wide block
+    eroded = _box_extreme_1d(block, radius=3, axis=1, op="erode")
+    assert eroded[0, 8:13].sum() == 5  # shrank to a 5-wide block
+    assert eroded[0, 5] == 0 and eroded[0, 15] == 0
+
+
+def test_box_extreme_1d_zero_radius_is_a_no_op():
+    arr = np.random.default_rng(0).uniform(0, 1, (10, 10))
+    assert np.array_equal(_box_extreme_1d(arr, 0, axis=0, op="dilate"), arr)
+
+
+def test_reshape_mask_dilate_increases_and_erode_decreases_area():
+    polygon = np.array([[30, 30], [70, 30], [70, 70], [30, 70]])
+    base = rasterize_mask(polygon, shape=(100, 100), feather=0)
+    dilated = _reshape_mask(base, edge_px=8)
+    eroded = _reshape_mask(base, edge_px=-8)
+    assert dilated.sum() > base.sum() > eroded.sum()
+
+
+def test_rasterize_mask_edge_zero_matches_no_edge_argument():
+    polygon = np.array([[20, 20], [80, 20], [80, 80], [20, 80]])
+    a = rasterize_mask(polygon, shape=(100, 100), feather=2.0)
+    b = rasterize_mask(polygon, shape=(100, 100), feather=2.0, edge=0.0)
+    assert np.array_equal(a, b)
+
+
+def test_rasterize_mask_dilate_never_regrows_into_a_cutout():
+    outer = np.array([[10, 10], [90, 10], [90, 90], [10, 90]])
+    hole = np.array([[40, 40], [60, 40], [60, 60], [40, 60]])
+    mask = rasterize_mask(outer, shape=(100, 100), cutouts=[hole], feather=0, edge=15)
+    assert mask[50, 50] == pytest.approx(0.0)  # still excluded, even after a large dilate
 
 
 def _fake_landmarks() -> FaceLandmarks:
@@ -114,6 +156,27 @@ def test_negative_even_skin_texture_lowers_local_variance_more_than_positive(mon
     flattened = retouch_faces(image, RetouchStrengths(even_skin=0.5, even_skin_texture=-1.0))
     detailed = retouch_faces(image, RetouchStrengths(even_skin=0.5, even_skin_texture=1.0))
     assert flattened.array[patch].std() < detailed.array[patch].std()
+
+
+def test_retouch_faces_extreme_erode_degrades_to_a_safe_no_op(monkeypatch):
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    image = _fake_image()
+    # edge_amount is clamped to [-1, 1] and capped at half an eye-width in _edge_offset_px, so
+    # -1 is already "as extreme as the API allows" - must not blow up _masked_regional_blur's
+    # weight normalization (mask -> all zero -> divide-by-near-zero risk) and must not error
+    result = retouch_faces(
+        image, RetouchStrengths(dark_circles=1.0, even_skin=1.0, contouring=1.0, edge_amount=-1.0)
+    )
+    assert result is not None
+    assert np.isfinite(result.array).all()
+
+
+def test_feather_amount_zero_gives_a_harder_edge_than_default(monkeypatch):
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    image = _fake_image()
+    hard = retouch_faces(image, RetouchStrengths(dark_circles=1.0, feather_amount=0.0))
+    soft = retouch_faces(image, RetouchStrengths(dark_circles=1.0, feather_amount=1.0))
+    assert not np.allclose(hard.array, soft.array)
 
 
 def test_retouch_faces_brightens_the_under_eye_region(monkeypatch):
