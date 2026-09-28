@@ -106,3 +106,39 @@ def test_decompose_layers_times_out(monkeypatch):
 
     with pytest.raises(TimeoutError):
         decompose_layers(_test_image(), endpoint="https://example.invalid", timeout=0, poll_interval=0)
+
+
+def test_decompose_layers_retries_a_transient_poll_failure(monkeypatch):
+    # a real deployment hit exactly this: one flaky httpx.ReadTimeout on an otherwise-successful
+    # multi-minute call shouldn't abort the whole operation
+    calls = {"get": 0}
+
+    def fake_post(url, files, timeout):
+        return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
+
+    def fake_get(url, params, timeout):
+        calls["get"] += 1
+        if calls["get"] == 1:
+            raise httpx.ReadTimeout("simulated transient failure")
+        return _fake_response(200, content=_zip_bytes(16, 16, 1), url=url)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    result = decompose_layers(_test_image(), endpoint="https://example.invalid", poll_interval=0)
+    assert calls["get"] == 2
+    assert len(result.layer_alphas) == 1
+
+
+def test_decompose_layers_still_times_out_if_polling_never_recovers(monkeypatch):
+    def fake_post(url, files, timeout):
+        return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
+
+    def fake_get(url, params, timeout):
+        raise httpx.ReadTimeout("simulated permanent failure")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    with pytest.raises(httpx.ReadTimeout):
+        decompose_layers(_test_image(), endpoint="https://example.invalid", timeout=0, poll_interval=0)

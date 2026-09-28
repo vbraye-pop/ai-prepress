@@ -62,8 +62,18 @@ def decompose_layers(
 
     deadline = time.monotonic() + timeout
     while True:
-        result_response = httpx.get(f"{endpoint}/result", params={"call_id": call_id}, timeout=30.0)
-        result_response.raise_for_status()
+        try:
+            result_response = httpx.get(f"{endpoint}/result", params={"call_id": call_id}, timeout=30.0)
+            result_response.raise_for_status()
+        except httpx.TransportError:
+            # a single flaky poll over a multi-minute operation shouldn't abort the whole call -
+            # confirmed against a real deployment: an isolated httpx.ReadTimeout on one /result
+            # poll killed an otherwise-successful run before this retry was added. Still bounded
+            # by the overall `timeout` below, so a genuinely dead endpoint still gives up.
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(poll_interval)
+            continue
 
         if result_response.headers.get("content-type", "").startswith("application/zip"):
             return _unpack_zip(result_response.content)
