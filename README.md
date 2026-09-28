@@ -56,7 +56,7 @@ Needs Python 3.12 - pinned deliberately rather than using whatever's newest on t
 
 ## Usage
 
-Run the API and UI - no environment variables needed, every feature currently in the UI runs locally:
+Run the API and UI - every feature except Layer Separation runs locally with no environment variables needed. Layer Separation calls a remote Modal-hosted model (`deploy/layer_separation.py`) and needs `AI_PREPRESS_LAYER_SEPARATION_URL` set to that deployment's base URL - see the Layer Separation section below:
 
 ```bash
 uv run uvicorn ai_prepress.api.main:app --reload
@@ -135,13 +135,35 @@ No scipy, and PIL's `GaussianBlur` flatly refuses float-mode images (confirmed b
 
 **Retouch Faces tab in the UI**: upload a portrait - every detected face is listed (with a cropped thumbnail) alongside an "All faces" row. Select a row to edit that face's (or everyone's) sliders independently; once any individual face is customized, "All faces" greys out rather than silently dropping whatever was set there, since the API sends either one broadcast strengths object or an explicit per-face map, never both at once. Shows original next to retouched side by side (same before/after pattern as Match Look), plus the same acceptance-check stats (Delta-E, bit depth, ICC profile) Match Look surfaces, and a full-precision TIFF download.
 
+## Layer Separation
+
+Input one photo, get every distinct object/subject back as its own RGBA layer plus a reconstructed background plate for whatever was behind them - Phase 1 of the segmentation/layer-separation suite. Model: [Qwen-Image-Layered](https://huggingface.co/Qwen/Qwen-Image-Layered) (Apache 2.0, confirmed on its own model card), a diffusion model that decomposes a photo into N RGBA layers in one pass. It's heavy and GPU-only, so it runs behind Modal (`deploy/layer_separation.py`), not locally - the first feature in this project that isn't CPU-fast enough to run in-process.
+
+Modal web endpoints cap any single HTTP request at 150 seconds, and a cold-started multi-layer diffusion call can run well past that. Rather than build this codebase's first job-polling UI, the Modal side exposes two fast endpoints (`submit` spawns the work and returns instantly, `result` is a cheap non-blocking check) wrapping one long-running internal call, and `ai_prepress.layer_decompose` hides the spawn-and-poll loop behind a single ordinary blocking function - `features/`, the API, and the UI all see one plain call, same shape as every other remote model in this project, just a slower one.
+
+```python
+from ai_prepress.io import load
+from ai_prepress.features.layer_separation import separate_layers
+
+image = load("photo.tiff")
+result = separate_layers(image)  # needs AI_PREPRESS_LAYER_SEPARATION_URL set
+result.background  # LoadedImage, RGB, 8-bit - genuinely model-generated, no higher-precision source exists
+result.layers       # list[SeparatedLayer], each an RGBA LoadedImage matching the source's own bit depth
+```
+
+**Bit-depth handling** is the one piece of real logic here, and it's the reason this isn't just "save whatever the model returns": the remote model's own RGB output is 8-bit diffusion-model output, which would be a silent regression in a project whose whole identity is never collapsing bit depth. So only the model's *alpha channel* is kept per layer - it gets recombined with the ORIGINAL image's own full-precision RGB, since a higher-fidelity source already exists for every non-occluded layer pixel. Only the background plate is genuinely novel content (reconstructed pixels with no source data behind them), so it's the one explicit, documented 8-bit exception.
+
+**Export** is RGBA TIFF via `ai_prepress.io` - straight (unassociated) alpha, not premultiplied, matching PNG's own convention and avoiding the fringing bugs that come from mixing the two. `psdtags` (TIFF-embedded Photoshop proprietary tags) is a promising path toward layers a retoucher can open natively in Photoshop, but its real-Photoshop round-trip hasn't been tested, so it's not built on top of an unverified assumption.
+
+**Layer Separation tab in the UI**: upload a photo, hit Separate layers (this can take a few minutes on a cold Modal start, and the status line says so). Shows the reconstructed background full-bleed, plus a list of every layer with a thumbnail, an editable name field, and a per-layer TIFF download. The name field is a deliberate placeholder for automatic naming, not a missing feature - see Roadmap.
+
 ## Roadmap
 
 - [x] Shared I/O + acceptance checks
 - [x] Image inspection (dimensions, bit depth, real ICC profile + guess, EXIF, raw tags)
 - [x] Match Look
 - [ ] pywebview desktop shell around the current FastAPI + HTML UI
-- [ ] **Segmentation + layer separation suite (current priority)** - input one photo, output every distinct object/subject as its own usable layer (alpha matte) plus a filled/completed background plate (the area behind removed objects reconstructed, not left as a hole). Expands the earlier "shared segmentation backend (SAM3 + BiRefNet), feeds masking/AI crop/background cutout" line into its own full feature - research in progress (multi-object layer separation quality, background hole-filling inpainting, practical layer export format given this project's own 16-bit TIFF/ICC discipline and the confirmed-unreliable open-source PSD-write situation).
+- [x] Layer Separation Phase 1 - Qwen-Image-Layered behind Modal, RGBA TIFF export, bit-depth-preserving compositing - see above. Still open: a background-fill fallback (LaMa/BrushNet/PowerPaint) if the model's own background reconstruction proves insufficient on real photos, automatic layer naming (a tiny VLM, InternVL3.5-2B - Apache 2.0, picked over Moondream 3 which is Business Source License 1.1 and can't ship in an MIT project) as a fast follow to the manual rename field, and `psdtags` native-Photoshop-layers export pending a real round-trip test.
 - [ ] AI Crop
 - [x] Face regions (`ai_prepress.face_landmarks`, local MediaPipe) - supersedes the earlier Modal-deployed semantic parser, see above. `deploy/face_parsing.py` and `ai_prepress.face_parsing` are still in the repo (real, tested, still deployed) but no longer wired into the UI.
 - [x] Retouch Faces - Dark Circles/Even Skin/Contouring via LF/HF split on the face-region masks, Eye Whiten/Teeth Whiten/Lip Enhance via direct HSL grades, multi-face support, mask Feather/Edge reshape - see above. Blemish removal and manual mask-brush editing still open, not built yet.
@@ -150,4 +172,4 @@ No scipy, and PIL's `GaussianBlur` flatly refuses float-mode images (confirmed b
 - [ ] Background Replacement
 - [ ] Snap to Eye - blocked on a scope call, Capture One's actual feature is a coarse focus-check aid, not a precision alignment tool, and it's not clear yet which one is wanted here
 
-Standalone desktop tool, not a Photoshop plugin, but the core is a plain package behind a local HTTP API specifically so a plugin (or a different deployment shape, later) can become just another client instead of a rewrite. The original plan routed every model-tier step through RunPod/Modal for v1 simplicity - in practice, MediaPipe's CPU path turned out fast enough that Face Regions and Retouch Faces both run entirely locally instead, no deployment needed. `deploy/face_parsing.py` (the retired Modal-hosted semantic parser, see above) is the one remaining example of the originally-planned remote-model pattern, kept as reference.
+Standalone desktop tool, not a Photoshop plugin, but the core is a plain package behind a local HTTP API specifically so a plugin (or a different deployment shape, later) can become just another client instead of a rewrite. The original plan routed every model-tier step through RunPod/Modal for v1 simplicity - in practice, MediaPipe's CPU path turned out fast enough that Face Regions and Retouch Faces both run entirely locally instead, no deployment needed. `deploy/face_parsing.py` (the retired Modal-hosted semantic parser, see above) was kept as reference for that originally-planned remote-model pattern, and Layer Separation is the first feature to actually need it again - `deploy/layer_separation.py` follows the same shape (plain HTTP client, heavy deps isolated to the `deploy` dependency group, never in the local venv).
