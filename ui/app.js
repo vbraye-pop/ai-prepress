@@ -182,85 +182,38 @@ function loadImage(src) {
   });
 }
 
-// matplotlib's tab20, https://matplotlib.org/stable/gallery/color/colormap_reference.html -
-// 10 hue families, each a [saturated, light] pair. Replaces an earlier hue-rotation formula
-// that turned out to be the same "garish, unrelated colors" mistake baked into the reference
-// face-parsing repo's own visualization code (zllrunning/face-parsing.PyTorch's vis_parsing_maps
-// uses the same kind of raw hue-cycle) - not a one-off bug, a known failure mode in this space.
-const TAB20 = [
-  "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a",
-  "#d62728", "#ff9896", "#9467bd", "#c5b0d5", "#8c564b", "#c49c94",
-  "#e377c2", "#f7b6d2", "#7f7f7f", "#c7c7c7", "#bcbd22", "#dbdb8d",
-  "#17becf", "#9edae5",
-];
-
-// hand-assigned rather than palette[index] - pairs bilateral and otherwise-related regions
-// onto the same hue family's saturated/light slots (l_eye+r_eye, l_ear+r_ear, l_brow+r_brow,
-// u_lip+l_lip, hair+hat, ear_r+neck_l as "accessories") so related parts read as connected
-// instead of random. "background" is deliberately absent - it's never drawn.
-const LABEL_COLOR_SLOT = {
-  l_eye: 0, r_eye: 1,
-  skin: 2, neck: 3,
-  l_ear: 4, r_ear: 5,
-  u_lip: 6, l_lip: 7,
-  l_brow: 8, r_brow: 9,
-  hair: 10, hat: 11,
-  mouth: 12, nose: 13,
-  cloth: 14,
-  ear_r: 16, neck_l: 17,
-  eye_g: 18,
-};
-
-// fixed anatomical order for the legend - sorting by pixel count instead (what an earlier
-// version did) reshuffles the list on every photo and breaks the bilateral pairing above,
-// since whichever side happens to have marginally more pixels jumps around independently
-const LEGEND_ORDER = [
-  "skin", "hair", "hat",
-  "l_eye", "r_eye", "l_brow", "r_brow",
-  "nose", "l_ear", "r_ear", "ear_r", "eye_g",
-  "mouth", "u_lip", "l_lip",
-  "neck", "neck_l", "cloth",
-];
-
-// the "bulk" regions (skin, hair, headwear, neck, clothing) wash the whole photo in color
-// when active and add little - this is a region-inspection tool for retouching work, and the
-// point is isolating small anatomical regions (see the README's dark-circle-correction example),
-// so only those start checked. Bulk regions are still one click away via their checkbox.
-const DEFAULT_ACTIVE_LABELS = new Set([
-  "l_eye", "r_eye", "l_brow", "r_brow", "nose",
-  "u_lip", "l_lip", "mouth", "l_ear", "r_ear", "ear_r", "eye_g",
-]);
-
 function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-function buildPalette(labelNames) {
-  return labelNames.map((name) => {
-    const slot = LABEL_COLOR_SLOT[name];
-    return slot === undefined ? [122, 122, 122] : hexToRgb(TAB20[slot]);
-  });
+function hexToRgba(hex, alpha) {
+  const [r, g, b] = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
-// marks pixels whose right or down neighbor has a different label - cheap single pass,
-// checking two of four neighbors is enough to catch every boundary edge somewhere in the scan
-function computeBoundaryMask(labelPixels, width, height) {
-  const data = labelPixels.data;
-  const at = (x, y) => data[(y * width + x) * 4];
-  const mask = new Uint8Array(width * height);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const here = at(x, y);
-      const right = x + 1 < width ? at(x + 1, y) : here;
-      const down = y + 1 < height ? at(x, y + 1) : here;
-      mask[y * width + x] = here !== right || here !== down ? 1 : 0;
-    }
-  }
-  return mask;
-}
+// one polygon per retouching region ai_prepress.face_landmarks derives from the 478-point
+// mesh - see that module's docstring for why these replaced the old 19-class semantic labels
+// (there's no under-eye/cheek/forehead class in any face-parsing dataset's taxonomy, so no
+// model swap was ever going to produce these regions; geometry from dense landmarks can).
+// Colors reuse matplotlib's tab20 hue families, same as the old palette, for bilateral pairs.
+const REGION_DEFS = [
+  { key: "skin_oval", label: "Skin", color: "#bcbd22", cutoutsKey: "skin_cutouts" },
+  { key: "forehead", label: "Forehead", color: "#ff7f0e" },
+  { key: "cheek_right", label: "R cheek", color: "#17becf" },
+  { key: "cheek_left", label: "L cheek", color: "#17becf" },
+  { key: "under_eye_right", label: "R under-eye", color: "#e377c2" },
+  { key: "under_eye_left", label: "L under-eye", color: "#e377c2" },
+];
 
-function setupFaceParsing() {
+// skin is the one "bulk" region here (the rest are already small and targeted), so it's the
+// one left unchecked by default - same reasoning as the old label defaults, just one region
+// this time instead of a whole class of them.
+const DEFAULT_ACTIVE_REGIONS = new Set([
+  "forehead", "cheek_right", "cheek_left", "under_eye_right", "under_eye_left",
+]);
+
+function setupFaceRegions() {
   const submitButton = document.getElementById("face-submit");
   const changePhotoButton = document.getElementById("face-change-photo");
   const mount = document.getElementById("face-import-mount");
@@ -281,7 +234,7 @@ function setupFaceParsing() {
     placeholder.hidden = false;
     status.textContent = "";
     sourceImage = null;
-    labelPixels = null;
+    regions = null;
   }
 
   const importer = createImageImport({
@@ -297,44 +250,49 @@ function setupFaceParsing() {
   changePhotoButton.addEventListener("click", () => importer.reset());
 
   let sourceImage = null; // the uploaded photo, redrawn under the overlay on every change
-  let labelPixels = null; // ImageData of the (downsampled, lossless) label-index map
-  let boundaryMask = null; // precomputed once per result, not per redraw - see computeBoundaryMask
-  let palette = [];
-  let hoveredIndex = null; // set while a legend row is hovered, dims every other active region
-  const activeLabels = new Set();
+  let regions = null; // { region_key: [[x,y], ...], ... } from /api/face-regions
+  let hoveredKey = null; // set while a legend row is hovered, dims every other active region
+  const activeKeys = new Set();
 
   function fillAlpha() {
     return Number(opacitySlider.value) / 100;
   }
 
-  // fill + a darker same-hue outline on boundary pixels, matching how detectron2's visualizer
-  // pairs alpha fill with a full-opacity edge rather than flat fill alone (which is the "garish
-  // paint bucket" look the first version had). Hovering a legend row pops that one region and
-  // dims the rest instead of hiding them outright, so context isn't lost while isolating one.
+  function tracePath(ctx, points) {
+    points.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+  }
+
+  // fill + a same-hue outline, matching the fill+outline convention professional segmentation
+  // viewers (detectron2, CVAT) use over flat fill alone. Hovering a legend row pops that one
+  // region and dims the rest instead of hiding them outright, so context isn't lost.
   function redraw() {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
-    if (!labelPixels) return;
+    if (!regions) return;
 
     const base = fillAlpha();
-    const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    for (let p = 0; p < labelPixels.data.length; p += 4) {
-      const labelIndex = labelPixels.data[p]; // grayscale source: R channel is the class index
-      if (labelIndex === 0 || !activeLabels.has(labelIndex)) continue; // 0 = background
-
-      const isBoundary = boundaryMask[p / 4] === 1;
-      let alpha = isBoundary ? Math.min(1, base + 0.4) : base;
-      if (hoveredIndex !== null) {
-        alpha = labelIndex === hoveredIndex ? Math.min(1, alpha + 0.25) : alpha * 0.2;
+    for (const def of REGION_DEFS) {
+      if (!activeKeys.has(def.key) || !regions[def.key]) continue;
+      let alpha = base;
+      if (hoveredKey !== null) {
+        alpha = def.key === hoveredKey ? Math.min(1, alpha + 0.25) : alpha * 0.2;
       }
 
-      const [r, g, b] = palette[labelIndex];
-      const shade = isBoundary ? 0.7 : 1; // darker outline, same hue as the fill
-      frame.data[p] = frame.data[p] * (1 - alpha) + r * shade * alpha;
-      frame.data[p + 1] = frame.data[p + 1] * (1 - alpha) + g * shade * alpha;
-      frame.data[p + 2] = frame.data[p + 2] * (1 - alpha) + b * shade * alpha;
+      ctx.beginPath();
+      tracePath(ctx, regions[def.key]);
+      if (def.cutoutsKey && regions[def.cutoutsKey]) {
+        for (const cutout of regions[def.cutoutsKey]) tracePath(ctx, cutout);
+        ctx.fillStyle = hexToRgba(def.color, alpha);
+        ctx.fill("evenodd");
+      } else {
+        ctx.fillStyle = hexToRgba(def.color, alpha);
+        ctx.fill();
+      }
+      ctx.strokeStyle = hexToRgba(def.color, Math.min(1, alpha + 0.3));
+      ctx.lineWidth = 2;
+      ctx.stroke();
     }
-    ctx.putImageData(frame, 0, 0);
   }
 
   let redrawQueued = false;
@@ -353,7 +311,7 @@ function setupFaceParsing() {
     const file = importer.getFile();
     if (!file) return;
 
-    status.textContent = "parsing... (the remote model can take a while on a cold start)";
+    status.textContent = "finding regions...";
     placeholder.hidden = true;
     canvasWrap.hidden = true;
     changePhotoButton.hidden = true;
@@ -365,7 +323,7 @@ function setupFaceParsing() {
 
     let response;
     try {
-      response = await fetch("/api/face-parse", { method: "POST", body });
+      response = await fetch("/api/face-regions", { method: "POST", body });
     } catch (err) {
       status.textContent = `request failed: ${err}`;
       return;
@@ -377,80 +335,63 @@ function setupFaceParsing() {
     }
 
     const result = await response.json();
+    if (!result.face_detected) {
+      status.textContent = "no face detected in this image";
+      mount.hidden = false;
+      return;
+    }
 
-    let source, labelsImg;
+    let source;
     try {
-      [source, labelsImg] = await Promise.all([
-        loadImage(`/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`),
-        loadImage(`/api/file/${result.labels_id}/download?t=${Date.now()}`),
-      ]);
+      source = await loadImage(`/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`);
     } catch (err) {
-      status.textContent = `couldn't load the result images: ${err}`;
+      status.textContent = `couldn't load the preview: ${err}`;
       return;
     }
 
     sourceImage = source;
-    canvas.width = labelsImg.naturalWidth;
-    canvas.height = labelsImg.naturalHeight;
+    canvas.width = source.naturalWidth;
+    canvas.height = source.naturalHeight;
+    regions = result.regions;
+    hoveredKey = null;
+    activeKeys.clear();
+    REGION_DEFS.filter((def) => DEFAULT_ACTIVE_REGIONS.has(def.key)).forEach((def) => activeKeys.add(def.key));
 
-    const labelCanvas = document.createElement("canvas");
-    labelCanvas.width = labelsImg.naturalWidth;
-    labelCanvas.height = labelsImg.naturalHeight;
-    const labelCtx = labelCanvas.getContext("2d");
-    labelCtx.drawImage(labelsImg, 0, 0);
-    labelPixels = labelCtx.getImageData(0, 0, labelCanvas.width, labelCanvas.height);
-    boundaryMask = computeBoundaryMask(labelPixels, canvas.width, canvas.height);
-
-    palette = buildPalette(result.label_names);
-    activeLabels.clear();
-    hoveredIndex = null;
-
-    const counts = result.label_counts;
-    const present = LEGEND_ORDER.filter((name) => name in counts).map((name) => [name, counts[name]]);
-    present
-      .filter(([name]) => DEFAULT_ACTIVE_LABELS.has(name))
-      .forEach(([name]) => activeLabels.add(result.label_names.indexOf(name)));
-
-    legend.innerHTML = present
-      .map(([name, count]) => {
-        const index = result.label_names.indexOf(name);
-        const [r, g, b] = palette[index];
-        const checked = activeLabels.has(index) ? "checked" : "";
-        return `
-          <li class="legend-item" data-label-index="${index}">
-            <label>
-              <input type="checkbox" ${checked} data-label-index="${index}" />
-              <span class="legend-swatch" style="background: rgb(${r},${g},${b})"></span>
-              <span class="legend-name">${labelize(name)}</span>
-            </label>
-            <span class="legend-count">${count.toLocaleString()} px</span>
-          </li>
-        `;
-      })
-      .join("");
+    legend.innerHTML = REGION_DEFS.map((def) => {
+      const checked = activeKeys.has(def.key) ? "checked" : "";
+      return `
+        <li class="legend-item" data-region-key="${def.key}">
+          <label>
+            <input type="checkbox" ${checked} data-region-key="${def.key}" />
+            <span class="legend-swatch" style="background: ${def.color}"></span>
+            <span class="legend-name">${def.label}</span>
+          </label>
+        </li>
+      `;
+    }).join("");
 
     legend.querySelectorAll("input[type=checkbox]").forEach((checkbox) => {
       checkbox.addEventListener("change", () => {
-        const index = Number(checkbox.dataset.labelIndex);
-        if (checkbox.checked) activeLabels.add(index);
-        else activeLabels.delete(index);
+        const key = checkbox.dataset.regionKey;
+        if (checkbox.checked) activeKeys.add(key);
+        else activeKeys.delete(key);
         redraw();
       });
     });
 
     legend.querySelectorAll(".legend-item").forEach((item) => {
-      const index = Number(item.dataset.labelIndex);
+      const key = item.dataset.regionKey;
       item.addEventListener("mouseenter", () => {
-        hoveredIndex = index;
+        hoveredKey = key;
         redraw();
       });
       item.addEventListener("mouseleave", () => {
-        hoveredIndex = null;
+        hoveredKey = null;
         redraw();
       });
     });
 
-    status.textContent = present.length ? "done" : "done - no face regions detected in this image";
+    status.textContent = "done";
     mount.hidden = true;
     canvasWrap.hidden = false;
     changePhotoButton.hidden = false;
@@ -463,4 +404,4 @@ function setupFaceParsing() {
 setupViewTabs();
 setupInspect();
 setupMatchLook();
-setupFaceParsing();
+setupFaceRegions();

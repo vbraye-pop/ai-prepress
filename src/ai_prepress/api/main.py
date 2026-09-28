@@ -22,7 +22,13 @@ from PIL import Image
 
 from ai_prepress import io as core_io
 from ai_prepress.checks import acceptance_report
-from ai_prepress.face_parsing import parse_portrait
+from ai_prepress.face_landmarks import (
+    cheek_region,
+    detect_landmarks,
+    forehead_region,
+    skin_region,
+    under_eye_band,
+)
 from ai_prepress.features.match_look import match_look
 from ai_prepress.metadata import describe
 
@@ -37,12 +43,14 @@ _UI_DIR = Path(__file__).resolve().parent.parent.parent.parent / "ui"
 _PREVIEW_MAX_EDGE = 1024
 
 
+def _preview_stride(height: int, width: int, max_edge: int = _PREVIEW_MAX_EDGE) -> int:
+    longest = max(height, width)
+    return -(-longest // max_edge) if longest > max_edge else 1  # ceil division
+
+
 def _downsample_for_preview(array: np.ndarray, max_edge: int = _PREVIEW_MAX_EDGE) -> np.ndarray:
-    longest = max(array.shape[0], array.shape[1])
-    if longest <= max_edge:
-        return array
-    stride = -(-longest // max_edge)  # ceil division
-    return array[::stride, ::stride]
+    stride = _preview_stride(array.shape[0], array.shape[1], max_edge)
+    return array if stride == 1 else array[::stride, ::stride]
 
 
 def _store_bytes(data: bytes, suffix: str) -> str:
@@ -101,37 +109,43 @@ async def api_match_look(
     )
 
 
-@app.post("/api/face-parse")
-async def api_face_parse(image: UploadFile = File(...)):
-    """Non-commercial R&D placeholder - see README's Face Parsing section for why.
+@app.post("/api/face-regions")
+async def api_face_regions(image: UploadFile = File(...)):
+    """Retouching regions derived from MediaPipe's 478-point face mesh - see
+    ai_prepress.face_landmarks for why this replaced the old CelebAMask-HQ semantic-parsing
+    endpoint: that scheme's 19 classes have no under-eye, cheek, or forehead class, which is
+    what Retouch Faces' Dark Circles/Contouring sub-tools actually need a mask for.
 
-    Detects and crops to the face before parsing (see ai_prepress.face_parsing.parse_portrait) -
-    the model expects tightly-cropped input, not a full environmental photo.
-
-    Returns the label map downsampled the same way /preview.jpg downsamples the source image
-    (same helper, same default max edge), so the two line up for the browser's canvas overlay
-    without it needing to reconcile two different resolutions."""
+    Coordinates are returned already scaled to match /preview.jpg's downsampling (same stride,
+    same source image), so the browser can draw regions straight onto the preview it already
+    has with no extra reconciliation."""
     file_id = _store_upload(image)
     loaded = core_io.load(_find_file(file_id))
 
-    result = parse_portrait(loaded)
-    small_labels = _downsample_for_preview(result.labels)
+    unit = core_io.to_unit_float(loaded.array)[..., :3]
+    rgb_8bit = (np.clip(unit, 0.0, 1.0) * 255 + 0.5).astype(np.uint8)
 
-    buffer = io.BytesIO()
-    Image.fromarray(small_labels, mode="L").save(buffer, format="PNG")
-    labels_id = _store_bytes(buffer.getvalue(), ".png")
+    landmarks = detect_landmarks(rgb_8bit)
+    if landmarks is None:
+        return JSONResponse({"file_id": file_id, "face_detected": False, "regions": {}})
 
-    values, counts = np.unique(result.labels, return_counts=True)
-    label_counts = {result.label_names[int(value)]: int(count) for value, count in zip(values, counts)}
+    height, width = rgb_8bit.shape[:2]
+    stride = _preview_stride(height, width)
 
-    return JSONResponse(
-        {
-            "file_id": file_id,
-            "labels_id": labels_id,
-            "label_names": result.label_names,
-            "label_counts": label_counts,
-        }
-    )
+    def scaled(points) -> list[list[float]]:
+        return (np.asarray(points) / stride).round(1).tolist()
+
+    oval, cutouts = skin_region(landmarks)
+    regions = {
+        "skin_oval": scaled(oval),
+        "skin_cutouts": [scaled(c) for c in cutouts],
+        "forehead": scaled(forehead_region(landmarks)),
+        "cheek_right": scaled(cheek_region(landmarks, "right")),
+        "cheek_left": scaled(cheek_region(landmarks, "left")),
+        "under_eye_right": scaled(under_eye_band(landmarks, "right")),
+        "under_eye_left": scaled(under_eye_band(landmarks, "left")),
+    }
+    return JSONResponse({"file_id": file_id, "face_detected": True, "regions": regions})
 
 
 @app.get("/api/file/{file_id}/preview.jpg")

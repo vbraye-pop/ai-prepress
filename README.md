@@ -59,11 +59,8 @@ Needs Python 3.12 - pinned deliberately rather than using whatever's newest on t
 Run the API and UI (the face-parsing tab needs the deployed Modal endpoint URL - it's stable across redeploys, so this is a real, current value, not a placeholder to fill in):
 
 ```bash
-AI_PREPRESS_FACE_PARSING_URL="https://vermeer-api-mngt--ai-prepress-face-parsing-faceparser-parse.modal.run" \
-  uv run uvicorn ai_prepress.api.main:app --reload
+uv run uvicorn ai_prepress.api.main:app --reload
 ```
-
-Without that env var set, Inspect and Match Look work fine but the Face Parsing tab returns a 500 on submit - it's a required setting, not an optional one, once you're past the first two tabs.
 
 Open `http://127.0.0.1:8000` - it opens straight into Inspect. Drag an image onto the drop zone (or click to browse; TIFF, PNG, JPEG, WebP) and it fills in place with a preview, a filename/size chip, and replace/remove controls - the same import control is reused wherever the app needs an image in, including both slots in Match Look. Previews shown in the browser are downsized (1024px on the long edge) and JPEG-encoded before being sent over - on a 48-megapixel 16-bit TIFF that cut preview generation from a few seconds and a 129MB PNG down to well under 50ms and a few hundred KB. The stored result itself, reachable from the download link, keeps full bit depth and resolution.
 
@@ -93,35 +90,25 @@ info.icc_profile       # real fields read from the embedded profile, {} if there
 info.colourspace_guess  # the sRGB / Adobe RGB (1998) bucket Match Look's math uses internally
 ```
 
-## Face parsing (remote, R&D placeholder)
+## Face regions (local, MediaPipe landmarks)
 
-First model-tier feature - everything above this point is pure local Python. `deploy/face_parsing.py` deploys [jonathandinu/face-parsing](https://huggingface.co/jonathandinu/face-parsing) (SegFormer-B5 fine-tuned on CelebAMask-HQ) to Modal as an HTTP endpoint; `ai_prepress.face_parsing` is the client.
+Region detection for Retouch Faces (under-eye, cheek, forehead, skin) runs locally via `ai_prepress.face_landmarks` - no Modal deployment, no GPU, MediaPipe's own CPU path is fast enough on a single image.
 
-> [!IMPORTANT]
-> **Non-commercial placeholder, not client-safe.** A license sweep found CelebAMask-HQ/LaPa - the two datasets essentially every open face-parsing model in the field trains on, including Microsoft's own MIT-licensed FaRL and the newest 2024/25 architectures - are explicitly non-commercial. There is no fully clean drop-in as of this writing. This model is here to prove the remote-model-call plumbing and unblock Retouch Faces' region work during R&D. Swap it (MediaPipe-derived landmark regions, EasyPortrait with a legal sign-off, or a paid Banuba license) before anything client-facing touches it.
-
-Deploy:
-
-```bash
-uv run --group deploy modal deploy deploy/face_parsing.py
-```
-
-Use:
+This replaced an earlier version built on `jonathandinu/face-parsing` (SegFormer-B5 fine-tuned on CelebAMask-HQ), deployed to Modal and non-commercial-licensed. That approach got the plumbing proven but turned out to be the wrong foundation: CelebAMask-HQ's 19-class taxonomy has no under-eye, cheek, or forehead class, and Retouch Faces' actual sub-tools (Dark Circles, Contouring) need exactly those regions - no amount of model quality fixes a class that doesn't exist in the training data. MediaPipe's 478-point face mesh defines these regions as geometry instead, and is Apache 2.0.
 
 ```python
 from ai_prepress.io import load
-from ai_prepress.face_parsing import parse_portrait
+from ai_prepress.face_landmarks import detect_landmarks, under_eye_band, skin_region
 
 image = load("portrait.tiff")
-result = parse_portrait(image)  # reads the endpoint URL from AI_PREPRESS_FACE_PARSING_URL
-under_eyes = result.mask_for("l_eye", "r_eye")
+landmarks = detect_landmarks(image.array)  # None if no face found
+right_under_eye = under_eye_band(landmarks, "right")  # polygon, (x, y) pixel coords
+skin_oval, cutouts = skin_region(landmarks)  # face oval + eye/lip cutouts to subtract from it
 ```
 
-The remote model only ever sees 8-bit RGB - it's a standard vision transformer, sending more precision than that wouldn't do anything - so the source image is deliberately downcast before it goes over the wire, not a silent loss.
+Region index groups (`FACE_OVAL`, eye/lip loops, eyebrows) are walked from mediapipe's own `face_mesh_connections.py` edge lists, not guessed - see the module's docstring for sourcing and for which regions are geometrically precise (eyes, lips) versus approximate (cheek, forehead - no natural landmark boundary exists for those the way an eyelid margin does for the eye).
 
-CelebAMask-HQ (the model's training data) is tightly-cropped, face-filling-the-frame portraits, not environmental photos. Feeding it a full photo where the face is a small fraction of the frame was producing genuinely bad output - background objects misclassified as face parts, blocky masks, missing eyes/brows entirely - because the model's fixed 512x512 input budget was mostly spent on background. `parse_portrait` fixes this: it runs a local face detector (`ai_prepress.face_detect`, MediaPipe BlazeFace), crops to the detected face with margin, sends only the crop to the model, then pastes the result back at the original coordinates. `parse_face` still exists as the raw single-call primitive if you already have a pre-cropped face image and want to skip detection. The 1.4x margin was picked empirically against a real test photo, optimizing for eye/brow/nose/lip pixel recall specifically, not for how coherent the mask looked at a glance - looser crops (2-3x) kept more hair/torso context but shrank the face enough to lose the eyes almost entirely.
-
-**Face Parsing tab in the UI**: upload a portrait, hit Parse. The server sends back the original preview plus a lossless, pre-downsampled label-index PNG (not a colored image - one pixel value per class, 0-18); the browser does all the actual visualization itself, compositing a color per region onto the photo in a `<canvas>`. The checkbox legend on the right toggles regions on and off - unchecking everything except the eyes isolates exactly what an eventual dark-circle correction would see, which is the point of building it this way rather than just returning a static picture. Toggling is instant since it's pure client-side canvas redraw, no extra request per click.
+**Face Regions tab in the UI**: upload a portrait, hit Find regions. Coordinates come back already scaled to match the preview image, so the browser draws each region as a canvas path directly - no per-pixel compositing needed the way the old label-map viewer required. Checkbox legend toggles regions, hover pops one region and dims the rest.
 
 ## Roadmap
 
@@ -131,7 +118,7 @@ CelebAMask-HQ (the model's training data) is tightly-cropped, face-filling-the-f
 - [ ] pywebview desktop shell around the current FastAPI + HTML UI
 - [ ] Shared segmentation backend (SAM3 + BiRefNet), feeds masking, AI crop, and background cutout
 - [ ] AI Crop
-- [x] Face parsing deployed to Modal (`deploy/face_parsing.py`) - non-commercial R&D placeholder, see above
+- [x] Face regions (`ai_prepress.face_landmarks`, local MediaPipe) - supersedes the earlier Modal-deployed semantic parser, see above. `deploy/face_parsing.py` and `ai_prepress.face_parsing` are still in the repo (real, tested, still deployed) but no longer wired into the UI.
 - [ ] Retouch Faces (LF/HF pipeline on top of the face-parsing masks; Blemish removal needs Inpaint-Anything too)
 - [x] Dust removal training-data synthesizer (`training/dust_removal/`)
 - [ ] Dust Removal (RF-DETR fine-tune on the synthetic data, then the fill step)

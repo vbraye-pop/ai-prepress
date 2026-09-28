@@ -24,7 +24,7 @@
     <nav class="pill-tabs" id="view-tabs">
       <button class="pill-tab" data-view="inspect" data-active="true">Inspect</button>
       <button class="pill-tab" data-view="match-look" data-active="false">Match Look</button>
-      <button class="pill-tab" data-view="face-parsing" data-active="false">Face Parsing</button>
+      <button class="pill-tab" data-view="face-regions" data-active="false">Face Regions</button>
     </nav>
   </header>
 
@@ -87,7 +87,7 @@
       </div>
     </section>
 
-    <section id="view-face-parsing" class="view">
+    <section id="view-face-regions" class="view">
       <div class="workspace">
         <div class="viewport-slot face-viewport">
           <div class="face-stage">
@@ -97,7 +97,7 @@
             </div>
           </div>
           <div class="face-action-bar">
-            <button type="button" class="btn btn-primary face-submit" id="face-submit" disabled>Parse face</button>
+            <button type="button" class="btn btn-primary face-submit" id="face-submit" disabled>Find regions</button>
             <button type="button" class="btn btn-secondary" id="face-change-photo" hidden>Change photo</button>
           </div>
         </div>
@@ -105,11 +105,11 @@
           <div class="inspector-head">
             <span class="t-eyebrow">Regions</span>
           </div>
-          <p id="face-placeholder" class="t-caption">Import a portrait and click Parse to see detected face regions.</p>
+          <p id="face-placeholder" class="t-caption">Import a portrait to find retouching regions - under-eye, cheek, forehead, skin.</p>
           <div id="face-status" class="status"></div>
           <div id="face-opacity-row" class="opacity-row" hidden>
             <label for="face-opacity" class="t-caption">Overlay opacity</label>
-            <input type="range" id="face-opacity" min="10" max="90" value="45" />
+            <input type="range" id="face-opacity" min="10" max="90" value="55" />
           </div>
           <ul id="face-legend" class="legend-list" hidden></ul>
         </aside>
