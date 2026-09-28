@@ -16,9 +16,11 @@ call it precedes.
 
 Real API (from the repo's own automatic_mask_generator.py, not guessed): the generator's own
 constructor already supports `min_mask_region_area` and `stability_score_thresh` - filtering
-happens INSIDE `.generate()`, not as a separate manual post-processing pass. Real documented
-practice for object-counting specifically: min_mask_region_area ~100px, stability_score_thresh
-~0.80 (the library's own default, 0.95, is tuned for precise segmentation and would likely
+happens INSIDE `.generate()`, not as a separate manual post-processing pass. min_mask_region_area
+is computed as 1% of the input image's own pixel area (not a fixed pixel count - a fixed 100px^2
+was the first version of this file and badly over-segmented a real ~3.4-megapixel test photo,
+object_count=17 for a still life with ~4 real objects, see count() for the fix). stability_score_
+thresh ~0.80 (the library's own default, 0.95, is tuned for precise segmentation and would likely
 under-count real objects that have a genuinely fuzzy/soft edge).
 
 Deploy: uv run --group deploy modal deploy deploy/object_count.py
@@ -39,19 +41,22 @@ from fastapi import File, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 CHECKPOINT_URL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt"
-CHECKPOINT_PATH = "/root/sam2/checkpoints/sam2.1_hiera_tiny.pt"
+CHECKPOINT_PATH = "/opt/sam2/checkpoints/sam2.1_hiera_tiny.pt"
 MODEL_CFG = "configs/sam2.1/sam2.1_hiera_t.yaml"
 
 app = modal.App("ai-prepress-object-count")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git")
+    .apt_install("git", "curl")
     .pip_install("torch", "torchvision", "pillow", "numpy", "fastapi", "python-multipart")
     .run_commands(
-        "git clone --depth 1 https://github.com/facebookresearch/sam2.git /root/sam2",
-        "cd /root/sam2 && pip install -e .",
-        f"mkdir -p /root/sam2/checkpoints && curl -L -o {CHECKPOINT_PATH} {CHECKPOINT_URL}",
+        # cloned to /opt, not /root - sam2's own build_sam.py refuses to import if the current
+        # working directory is the PARENT of where the repo lives (a real runtime check in its
+        # source, not a docs warning), and Modal's containers default to running from /root
+        "git clone --depth 1 https://github.com/facebookresearch/sam2.git /opt/sam2",
+        "cd /opt/sam2 && pip install -e .",
+        f"mkdir -p /opt/sam2/checkpoints && curl -L -o {CHECKPOINT_PATH} {CHECKPOINT_URL}",
     )
 )
 
@@ -68,15 +73,31 @@ async def count(file: UploadFile = File(...)) -> Response:
     contents = await file.read()
     source = np.array(Image.open(io.BytesIO(contents)).convert("RGB"))
 
+    # A fixed pixel-area threshold (the first version of this endpoint used 100px^2) behaves
+    # wildly inconsistently across photo resolutions, and even a resolution-relative 1-2%
+    # threshold wasn't enough on its own - confirmed empirically against two real photos, not
+    # assumed: a 4-real-object still life came back object_count=17 at the library's default
+    # points_per_side=32, and a single-person photo with grass and a background crowd came back
+    # 67. SAM2's automatic mode doesn't distinguish "discrete foreground object" from "any
+    # locally coherent texture patch" (a chunk of lawn, a window pane, a distant figure are all
+    # individually large and stable enough to survive an area filter alone). A much sparser point
+    # grid is the one lever that empirically moved the number at all (points_per_side=2 dropped
+    # the still-life count to 8) - this remains a REAL, OPEN CALIBRATION LIMITATION, not a solved
+    # problem: a 4-point grid risks under-sampling genuinely separate objects just as easily as a
+    # dense grid over-counts texture. MIN_LAYERS/MAX_LAYERS clamping in
+    # features/layer_separation.py is what actually keeps this safe end to end regardless of how
+    # well-calibrated this raw count is - treat that clamp as the real safety net, this endpoint
+    # as a best-effort signal to correct further against more real photos over time.
+    min_area = int(0.02 * source.shape[0] * source.shape[1])
+
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         model = build_sam2(MODEL_CFG, CHECKPOINT_PATH, device="cuda")
         generator = SAM2AutomaticMaskGenerator(
             model,
-            min_mask_region_area=100,
-            # the library's own default (0.95) is tuned for precise segmentation - this is a
-            # coarse object count, not a mask-quality task, so a looser threshold catches real
-            # objects with a genuinely soft/fuzzy edge that a stricter one would drop
-            stability_score_thresh=0.80,
+            points_per_side=8,
+            min_mask_region_area=min_area,
+            pred_iou_thresh=0.9,
+            stability_score_thresh=0.90,
         )
         masks = generator.generate(source)
 
