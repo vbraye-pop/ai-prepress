@@ -90,6 +90,32 @@ info.icc_profile       # real fields read from the embedded profile, {} if there
 info.colourspace_guess  # the sRGB / Adobe RGB (1998) bucket Match Look's math uses internally
 ```
 
+## Face parsing (remote, R&D placeholder)
+
+First model-tier feature - everything above this point is pure local Python. `deploy/face_parsing.py` deploys [jonathandinu/face-parsing](https://huggingface.co/jonathandinu/face-parsing) (SegFormer-B5 fine-tuned on CelebAMask-HQ) to Modal as an HTTP endpoint; `ai_prepress.face_parsing` is the client.
+
+> [!IMPORTANT]
+> **Non-commercial placeholder, not client-safe.** A license sweep found CelebAMask-HQ/LaPa - the two datasets essentially every open face-parsing model in the field trains on, including Microsoft's own MIT-licensed FaRL and the newest 2024/25 architectures - are explicitly non-commercial. There is no fully clean drop-in as of this writing. This model is here to prove the remote-model-call plumbing and unblock Retouch Faces' region work during R&D. Swap it (MediaPipe-derived landmark regions, EasyPortrait with a legal sign-off, or a paid Banuba license) before anything client-facing touches it.
+
+Deploy:
+
+```bash
+uv run --group deploy modal deploy deploy/face_parsing.py
+```
+
+Use:
+
+```python
+from ai_prepress.io import load
+from ai_prepress.face_parsing import parse_face
+
+image = load("portrait.tiff")
+result = parse_face(image)  # reads the endpoint URL from AI_PREPRESS_FACE_PARSING_URL
+under_eyes = result.mask_for("l_eye", "r_eye")
+```
+
+The remote model only ever sees 8-bit RGB - it's a standard vision transformer, sending more precision than that wouldn't do anything - so the source image is deliberately downcast before it goes over the wire, not a silent loss. Ran it against a real portrait end to end (not just a synthetic test): label map came back the correct shape, with plausible per-class pixel counts across skin, hair, brows, lips, and both eyes.
+
 ## Roadmap
 
 - [x] Shared I/O + acceptance checks
@@ -98,7 +124,8 @@ info.colourspace_guess  # the sRGB / Adobe RGB (1998) bucket Match Look's math u
 - [ ] pywebview desktop shell around the current FastAPI + HTML UI
 - [ ] Shared segmentation backend (SAM3 + BiRefNet), feeds masking, AI crop, and background cutout
 - [ ] AI Crop
-- [ ] Retouch Faces
+- [x] Face parsing deployed to Modal (`deploy/face_parsing.py`) - non-commercial R&D placeholder, see above
+- [ ] Retouch Faces (LF/HF pipeline on top of the face-parsing masks; Blemish removal needs Inpaint-Anything too)
 - [x] Dust removal training-data synthesizer (`training/dust_removal/`)
 - [ ] Dust Removal (RF-DETR fine-tune on the synthetic data, then the fill step)
 - [ ] Background Replacement
