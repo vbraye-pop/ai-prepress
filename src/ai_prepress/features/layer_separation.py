@@ -52,6 +52,9 @@ class SeparatedLayer:
 class SeparatedLayers:
     background: LoadedImage  # (H, W, 3), 8-bit - inherently model-generated, see module docstring
     layers: list[SeparatedLayer]
+    requested_layers: int  # the actual N sent to the model - not len(layers)+1, which is what
+    # came BACK; surfaced for transparency while MIN_LAYERS/MAX_LAYERS/the count formula still
+    # need tuning against real photos, see _estimate_layer_count
 
 
 BBOX_ALPHA_THRESHOLD = 127  # majority-opaque, not "any nonzero" - see below. Not underscore-
@@ -119,4 +122,4 @@ def separate_layers(image: LoadedImage, endpoint: str | None = None) -> Separate
         layer.suggested_name = name
 
     background = LoadedImage(array=decomposed.background, icc_profile=icc_profile, bit_depth=8)
-    return SeparatedLayers(background=background, layers=layers)
+    return SeparatedLayers(background=background, layers=layers, requested_layers=layers_requested)

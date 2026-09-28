@@ -300,6 +300,7 @@ async def api_layer_separation(image: UploadFile = File(...)):
                 "result_id": layer_id,
                 "bbox": layer.bbox,
                 "alpha_coverage": float((layer.image.array[..., 3] > BBOX_ALPHA_THRESHOLD).mean()),
+                "suggested_name": layer.suggested_name,
             }
         )
 
@@ -308,6 +309,7 @@ async def api_layer_separation(image: UploadFile = File(...)):
             "file_id": file_id,
             "background_id": background_id,
             "layer_count": len(result.layers),
+            "requested_layers": result.requested_layers,
             "layers": layers_payload,
         }
     )
