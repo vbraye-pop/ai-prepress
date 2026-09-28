@@ -32,6 +32,7 @@ from ai_prepress.face_landmarks import (
     skin_region,
     under_eye_band,
 )
+from ai_prepress.features.layer_separation import separate_layers
 from ai_prepress.features.match_look import match_look
 from ai_prepress.features.retouch_faces import RetouchStrengths, retouch_faces
 from ai_prepress.metadata import describe
@@ -259,6 +260,49 @@ async def api_retouch_faces_apply(request: RetouchApplyRequest):
     )
 
 
+@app.post("/api/layer-separation")
+async def api_layer_separation(image: UploadFile = File(...)):
+    """Photo -> per-object RGBA layers + a reconstructed background plate. Single upload -> one
+    call -> JSON, same shape as /api/face-regions and /api/match-look - unlike Retouch Faces,
+    there's no cheaper "detect only" phase to cache separately, since the decomposition itself is
+    both the expensive step and the final result. See features.layer_separation for the remote
+    call and bit-depth-preservation logic; this endpoint can block for minutes on a cold Modal
+    start (see ai_prepress.layer_decompose's module docstring for why that's still a plain
+    synchronous call rather than a job-polling API at this layer)."""
+    file_id = _store_upload(image)
+    loaded = core_io.load(_find_file(file_id))
+
+    try:
+        result = separate_layers(loaded)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+
+    background_id = _store_bytes(b"", ".tiff")
+    core_io.save(result.background, _find_file(background_id))
+
+    layers_payload = []
+    for index, layer in enumerate(result.layers):
+        layer_id = _store_bytes(b"", ".tiff")
+        core_io.save(layer.image, _find_file(layer_id))
+        layers_payload.append(
+            {
+                "layer_index": index,
+                "result_id": layer_id,
+                "bbox": layer.bbox,
+                "alpha_coverage": float((layer.image.array[..., 3] > 0).mean()),
+            }
+        )
+
+    return JSONResponse(
+        {
+            "file_id": file_id,
+            "background_id": background_id,
+            "layer_count": len(result.layers),
+            "layers": layers_payload,
+        }
+    )
+
+
 @app.get("/api/file/{file_id}/preview.jpg")
 def get_preview(file_id: str):
     """Browsers can't render 16-bit TIFF, so this downsamples to 8-bit just for display.
@@ -272,6 +316,22 @@ def get_preview(file_id: str):
     Image.fromarray(as_8bit[..., :3]).save(buffer, format="JPEG", quality=85)
     buffer.seek(0)
     return StreamingResponse(buffer, media_type="image/jpeg")
+
+
+@app.get("/api/file/{file_id}/preview.png")
+def get_preview_png(file_id: str):
+    """Same downsampling as preview.jpg, but PNG with alpha kept intact - JPEG can't carry an
+    alpha channel at all, so pointing the .jpg route at a layer wouldn't error, it would silently
+    render a solid rectangle with the alpha discarded. Used for layer-separation thumbnails and
+    the background plate; every other tab keeps using .jpg, unchanged."""
+    loaded = core_io.load(_find_file(file_id))
+    small = _downsample_for_preview(loaded.array)
+    as_8bit = core_io.from_unit_float(core_io.to_unit_float(small), np.uint8)
+
+    buffer = io.BytesIO()
+    Image.fromarray(as_8bit).save(buffer, format="PNG")
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="image/png")
 
 
 @app.get("/api/file/{file_id}/download")
