@@ -16,6 +16,10 @@ dependencies = [
     "python-multipart>=0.0.12",
     "huggingface-hub>=0.26",
     "httpx>=0.27",
+    # pinned below 1.0 - mediapipe 1.0.x hard-crashes on macOS/arm64 for any Tasks graph with a
+    # detector calculator (TensorsToDetectionsCalculator inits Metal unconditionally and aborts
+    # when the graph never registers a Metal service, even with delegate=CPU explicitly set)
+    "mediapipe==0.10.35",
 ]
 
 [dependency-groups]

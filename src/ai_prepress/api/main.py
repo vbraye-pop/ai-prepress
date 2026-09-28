@@ -22,7 +22,7 @@ from PIL import Image
 
 from ai_prepress import io as core_io
 from ai_prepress.checks import acceptance_report
-from ai_prepress.face_parsing import parse_face
+from ai_prepress.face_parsing import parse_portrait
 from ai_prepress.features.match_look import match_look
 from ai_prepress.metadata import describe
 
@@ -105,13 +105,16 @@ async def api_match_look(
 async def api_face_parse(image: UploadFile = File(...)):
     """Non-commercial R&D placeholder - see README's Face Parsing section for why.
 
+    Detects and crops to the face before parsing (see ai_prepress.face_parsing.parse_portrait) -
+    the model expects tightly-cropped input, not a full environmental photo.
+
     Returns the label map downsampled the same way /preview.jpg downsamples the source image
     (same helper, same default max edge), so the two line up for the browser's canvas overlay
     without it needing to reconcile two different resolutions."""
     file_id = _store_upload(image)
     loaded = core_io.load(_find_file(file_id))
 
-    result = parse_face(loaded)
+    result = parse_portrait(loaded)
     small_labels = _downsample_for_preview(result.labels)
 
     buffer = io.BytesIO()

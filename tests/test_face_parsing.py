@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 from PIL import Image, ImageCms
 
-from ai_prepress.face_parsing import LABELS, FaceParsingResult, parse_face
+import ai_prepress.face_parsing as face_parsing_module
+from ai_prepress.face_parsing import LABELS, FaceParsingResult, parse_face, parse_portrait
 from ai_prepress.io import LoadedImage
 
 _SRGB = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
@@ -58,6 +59,38 @@ def test_parse_face_reads_endpoint_from_env(monkeypatch):
 
     monkeypatch.setattr(httpx, "post", fake_post)
     parse_face(_test_image(4, 4))  # no endpoint= passed, must come from the env var
+
+
+def test_parse_portrait_pastes_the_crop_result_back_at_the_detected_offset(monkeypatch):
+    skin = LABELS.index("skin")
+    monkeypatch.setattr(face_parsing_module, "detect_face_box", lambda rgb: (4, 4, 12, 12))
+    monkeypatch.setattr(
+        face_parsing_module, "square_crop_around", lambda box, size, margin: (4, 4, 12, 12)
+    )
+
+    def fake_post(url, files, timeout):
+        return _fake_response(200, _label_png_bytes(8, 8, skin), url)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = parse_portrait(_test_image(16, 16), endpoint="https://example.invalid/parse")
+    assert result.labels.shape == (16, 16)
+    assert (result.labels[4:12, 4:12] == skin).all()
+    assert (result.labels[:4, :] == 0).all()
+    assert (result.labels[12:, :] == 0).all()
+
+
+def test_parse_portrait_falls_back_to_full_image_when_no_face_detected(monkeypatch):
+    hair = LABELS.index("hair")
+    monkeypatch.setattr(face_parsing_module, "detect_face_box", lambda rgb: None)
+
+    def fake_post(url, files, timeout):
+        return _fake_response(200, _label_png_bytes(16, 16, hair), url)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    result = parse_portrait(_test_image(16, 16), endpoint="https://example.invalid/parse")
+    assert (result.labels == hair).all()
 
 
 def test_mask_for_combines_multiple_labels():

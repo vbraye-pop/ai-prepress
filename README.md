@@ -110,14 +110,16 @@ Use:
 
 ```python
 from ai_prepress.io import load
-from ai_prepress.face_parsing import parse_face
+from ai_prepress.face_parsing import parse_portrait
 
 image = load("portrait.tiff")
-result = parse_face(image)  # reads the endpoint URL from AI_PREPRESS_FACE_PARSING_URL
+result = parse_portrait(image)  # reads the endpoint URL from AI_PREPRESS_FACE_PARSING_URL
 under_eyes = result.mask_for("l_eye", "r_eye")
 ```
 
-The remote model only ever sees 8-bit RGB - it's a standard vision transformer, sending more precision than that wouldn't do anything - so the source image is deliberately downcast before it goes over the wire, not a silent loss. Ran it against a real portrait end to end (not just a synthetic test): label map came back the correct shape, with plausible per-class pixel counts across skin, hair, brows, lips, and both eyes.
+The remote model only ever sees 8-bit RGB - it's a standard vision transformer, sending more precision than that wouldn't do anything - so the source image is deliberately downcast before it goes over the wire, not a silent loss.
+
+CelebAMask-HQ (the model's training data) is tightly-cropped, face-filling-the-frame portraits, not environmental photos. Feeding it a full photo where the face is a small fraction of the frame was producing genuinely bad output - background objects misclassified as face parts, blocky masks, missing eyes/brows entirely - because the model's fixed 512x512 input budget was mostly spent on background. `parse_portrait` fixes this: it runs a local face detector (`ai_prepress.face_detect`, MediaPipe BlazeFace), crops to the detected face with margin, sends only the crop to the model, then pastes the result back at the original coordinates. `parse_face` still exists as the raw single-call primitive if you already have a pre-cropped face image and want to skip detection. The 1.4x margin was picked empirically against a real test photo, optimizing for eye/brow/nose/lip pixel recall specifically, not for how coherent the mask looked at a glance - looser crops (2-3x) kept more hair/torso context but shrank the face enough to lose the eyes almost entirely.
 
 **Face Parsing tab in the UI**: upload a portrait, hit Parse. The server sends back the original preview plus a lossless, pre-downsampled label-index PNG (not a colored image - one pixel value per class, 0-18); the browser does all the actual visualization itself, compositing a color per region onto the photo in a `<canvas>`. The checkbox legend on the right toggles regions on and off - unchecking everything except the eyes isolates exactly what an eventual dark-circle correction would see, which is the point of building it this way rather than just returning a static picture. Toggling is instant since it's pure client-side canvas redraw, no extra request per click.
 

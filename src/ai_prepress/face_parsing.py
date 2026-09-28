@@ -12,6 +12,7 @@ place.
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import os
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ import httpx
 import numpy as np
 from PIL import Image
 
+from ai_prepress.face_detect import detect_face_box, square_crop_around
 from ai_prepress.io import LoadedImage, to_unit_float
 
 # Must match deploy/face_parsing.py's LABELS exactly - kept as a separate copy rather than a
@@ -65,3 +67,36 @@ def parse_face(image: LoadedImage, endpoint: str | None = None, timeout: float =
 
     labels = np.array(Image.open(io.BytesIO(response.content)))
     return FaceParsingResult(labels=labels, label_names=LABELS)
+
+
+def parse_portrait(
+    image: LoadedImage, endpoint: str | None = None, timeout: float = 60.0, margin: float = 1.4
+) -> FaceParsingResult:
+    """Detects the face, crops to it with margin, and parses the crop - then pastes the result
+    back into a full-image-sized label array (background everywhere outside the crop).
+
+    The model was fine-tuned on CelebAMask-HQ, tightly-cropped face-filling-the-frame data.
+    Sending it a full environmental photo puts the face at a few percent of its fixed 512x512
+    input budget, which is what produced unusable output (background misclassified as face parts,
+    crude blocky masks) on real test photos. Cropping first fixes that with the exact same model
+    and weights - see face_detect.py for how the margin was picked.
+
+    Falls back to parsing the full image unmodified if no face is detected, rather than failing -
+    a photo without a clearly detectable face is a real case the caller should still get output for.
+    """
+    unit = to_unit_float(image.array)[..., :3]
+    rgb_8bit = (np.clip(unit, 0.0, 1.0) * 255 + 0.5).astype(np.uint8)
+    height, width = rgb_8bit.shape[:2]
+
+    box = detect_face_box(rgb_8bit)
+    if box is None:
+        return parse_face(image, endpoint=endpoint, timeout=timeout)
+
+    x0, y0, x1, y1 = square_crop_around(box, (width, height), margin=margin)
+    cropped = dataclasses.replace(image, array=image.array[y0:y1, x0:x1])
+
+    crop_result = parse_face(cropped, endpoint=endpoint, timeout=timeout)
+
+    full_labels = np.zeros((height, width), dtype=np.uint8)
+    full_labels[y0:y1, x0:x1] = crop_result.labels
+    return FaceParsingResult(labels=full_labels, label_names=LABELS)
