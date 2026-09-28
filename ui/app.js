@@ -211,6 +211,26 @@ const LABEL_COLOR_SLOT = {
   eye_g: 18,
 };
 
+// fixed anatomical order for the legend - sorting by pixel count instead (what an earlier
+// version did) reshuffles the list on every photo and breaks the bilateral pairing above,
+// since whichever side happens to have marginally more pixels jumps around independently
+const LEGEND_ORDER = [
+  "skin", "hair", "hat",
+  "l_eye", "r_eye", "l_brow", "r_brow",
+  "nose", "l_ear", "r_ear", "ear_r", "eye_g",
+  "mouth", "u_lip", "l_lip",
+  "neck", "neck_l", "cloth",
+];
+
+// the "bulk" regions (skin, hair, headwear, neck, clothing) wash the whole photo in color
+// when active and add little - this is a region-inspection tool for retouching work, and the
+// point is isolating small anatomical regions (see the README's dark-circle-correction example),
+// so only those start checked. Bulk regions are still one click away via their checkbox.
+const DEFAULT_ACTIVE_LABELS = new Set([
+  "l_eye", "r_eye", "l_brow", "r_brow", "nose",
+  "u_lip", "l_lip", "mouth", "l_ear", "r_ear", "ear_r", "eye_g",
+]);
+
 function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -242,6 +262,8 @@ function computeBoundaryMask(labelPixels, width, height) {
 
 function setupFaceParsing() {
   const submitButton = document.getElementById("face-submit");
+  const changePhotoButton = document.getElementById("face-change-photo");
+  const mount = document.getElementById("face-import-mount");
   const placeholder = document.getElementById("face-placeholder");
   const status = document.getElementById("face-status");
   const canvasWrap = document.getElementById("face-canvas-wrap");
@@ -250,14 +272,29 @@ function setupFaceParsing() {
   const opacitySlider = document.getElementById("face-opacity");
   const legend = document.getElementById("face-legend");
 
+  function resetResult() {
+    mount.hidden = false;
+    canvasWrap.hidden = true;
+    changePhotoButton.hidden = true;
+    opacityRow.hidden = true;
+    legend.hidden = true;
+    placeholder.hidden = false;
+    status.textContent = "";
+    sourceImage = null;
+    labelPixels = null;
+  }
+
   const importer = createImageImport({
     label: "Drop a portrait here",
     hint: "or click to browse",
     onFile: (file) => {
       submitButton.disabled = !file;
+      if (!file) resetResult();
     },
   });
-  document.getElementById("face-import-mount").appendChild(importer.el);
+  mount.appendChild(importer.el);
+
+  changePhotoButton.addEventListener("click", () => importer.reset());
 
   let sourceImage = null; // the uploaded photo, redrawn under the overlay on every change
   let labelPixels = null; // ImageData of the (downsampled, lossless) label-index map
@@ -319,6 +356,7 @@ function setupFaceParsing() {
     status.textContent = "parsing... (the remote model can take a while on a cold start)";
     placeholder.hidden = true;
     canvasWrap.hidden = true;
+    changePhotoButton.hidden = true;
     opacityRow.hidden = true;
     legend.hidden = true;
 
@@ -367,19 +405,21 @@ function setupFaceParsing() {
     activeLabels.clear();
     hoveredIndex = null;
 
-    const present = Object.entries(result.label_counts)
-      .filter(([name]) => name !== "background")
-      .sort((a, b) => b[1] - a[1]);
-    present.forEach(([name]) => activeLabels.add(result.label_names.indexOf(name)));
+    const counts = result.label_counts;
+    const present = LEGEND_ORDER.filter((name) => name in counts).map((name) => [name, counts[name]]);
+    present
+      .filter(([name]) => DEFAULT_ACTIVE_LABELS.has(name))
+      .forEach(([name]) => activeLabels.add(result.label_names.indexOf(name)));
 
     legend.innerHTML = present
       .map(([name, count]) => {
         const index = result.label_names.indexOf(name);
         const [r, g, b] = palette[index];
+        const checked = activeLabels.has(index) ? "checked" : "";
         return `
           <li class="legend-item" data-label-index="${index}">
             <label>
-              <input type="checkbox" checked data-label-index="${index}" />
+              <input type="checkbox" ${checked} data-label-index="${index}" />
               <span class="legend-swatch" style="background: rgb(${r},${g},${b})"></span>
               <span class="legend-name">${labelize(name)}</span>
             </label>
@@ -411,7 +451,9 @@ function setupFaceParsing() {
     });
 
     status.textContent = present.length ? "done" : "done - no face regions detected in this image";
+    mount.hidden = true;
     canvasWrap.hidden = false;
+    changePhotoButton.hidden = false;
     opacityRow.hidden = false;
     legend.hidden = false;
     redraw();

@@ -89,11 +89,16 @@
 
     <section id="view-face-parsing" class="view">
       <div class="workspace">
-        <div class="viewport-slot">
-          <div id="face-import-mount" class="importer-box"></div>
-          <button type="button" class="btn btn-primary face-submit" id="face-submit" disabled>Parse face</button>
-          <div id="face-canvas-wrap" class="face-canvas-wrap" hidden>
-            <canvas id="face-canvas"></canvas>
+        <div class="viewport-slot face-viewport">
+          <div class="face-stage">
+            <div id="face-import-mount"></div>
+            <div id="face-canvas-wrap" class="face-canvas-wrap" hidden>
+              <canvas id="face-canvas"></canvas>
+            </div>
+          </div>
+          <div class="face-action-bar">
+            <button type="button" class="btn btn-primary face-submit" id="face-submit" disabled>Parse face</button>
+            <button type="button" class="btn btn-secondary" id="face-change-photo" hidden>Change photo</button>
           </div>
         </div>
         <aside class="inspector-panel">

@@ -186,32 +186,69 @@ a.btn {
   cursor: not-allowed;
 }
 
+/* components.css sets display: inline-flex on .btn, which beats the browser's default
+   [hidden] { display: none } at equal specificity - without this override a hidden button
+   still renders. */
+.btn[hidden] {
+  display: none;
+}
+
 /* ── Face Parsing ────────────────────────────────────────────────────── */
-.face-submit {
-  margin-top: var(--s-sm);
+/* Same full-bleed treatment as Inspect's viewport-slot (image/canvas fills all available
+   space), not a small centered thumbnail - the first two passes at this both left most of
+   the panel as dead space with a tiny image floating in it. face-stage stacks the importer
+   and the result canvas on top of each other (only one visible at a time) so swapping from
+   "importing" to "parsed" doesn't reflow the layout or leave the original photo duplicated
+   next to its own overlay. */
+.face-viewport {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+.face-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.face-stage > #face-import-mount {
+  position: absolute;
+  inset: 0;
+}
+
+.face-action-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-md);
 }
 
 .face-canvas-wrap {
-  margin-top: var(--s-lg);
-  text-align: center;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r-xl);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+/* the class above sets its own `display`, which - at equal specificity - beats the
+   browser's default `[hidden] { display: none }` rule since author styles always win
+   over the UA stylesheet regardless of source order. Without this, the hidden attribute
+   is silently ignored and the wrap paints over whatever's underneath it. Same footgun
+   hits any `.btn` (components.css sets display: inline-flex on it), handled below. */
+.face-canvas-wrap[hidden] {
+  display: none;
 }
 
 .face-canvas-wrap canvas {
-  /* primary content here, not a small result thumbnail (contrast with Match Look's
-     320px-capped preview) - sized generously but capped so a portrait-oriented photo
-     can't push the rest of the page off screen the way the first version did */
-  max-width: 100%;
-  max-height: 640px;
-  width: auto;
-  height: auto;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-md);
-  display: inline-block;
-  background: var(--surface-sunken);
-}
-
-.face-canvas-wrap p {
-  margin-top: 6px;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .opacity-row {
