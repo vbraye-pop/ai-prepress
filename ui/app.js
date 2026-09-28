@@ -173,6 +173,157 @@ function setupMatchLook() {
   });
 }
 
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(`failed to load ${src}`));
+    img.src = src;
+  });
+}
+
+// evenly-spaced hues rather than a hand-picked palette - guarantees every label gets a
+// visually distinct color regardless of how many of the 19 classes actually show up
+function hslToRgb(hue, saturationPct, lightnessPct) {
+  const s = saturationPct / 100;
+  const l = lightnessPct / 100;
+  const k = (n) => (n + hue / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(255 * f(0)), Math.round(255 * f(8)), Math.round(255 * f(4))];
+}
+
+function labelPalette(count) {
+  return Array.from({ length: count }, (_, i) => hslToRgb(Math.round((360 * i) / count), 70, 55));
+}
+
+function setupFaceParsing() {
+  const form = document.getElementById("face-form");
+  const submitButton = document.getElementById("face-submit");
+  const status = document.getElementById("face-status");
+  const output = document.getElementById("face-output");
+  const canvas = document.getElementById("face-canvas");
+  const legend = document.getElementById("face-legend");
+
+  const importer = createImageImport({
+    label: "Drop a portrait here",
+    hint: "or click to browse",
+    onFile: (file) => {
+      submitButton.disabled = !file;
+    },
+  });
+  document.getElementById("face-import-mount").appendChild(importer.el);
+
+  let sourceImage = null; // the uploaded photo, redrawn under the overlay on every toggle
+  let labelPixels = null; // ImageData of the (downsampled, lossless) label-index map
+  let palette = [];
+  const activeLabels = new Set();
+
+  // draws from scratch every time rather than patching pixels incrementally - simpler to get
+  // right, and a few hundred thousand pixels is well under a frame even on modest hardware
+  function redraw() {
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+    if (!labelPixels) return;
+
+    const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < labelPixels.data.length; i += 4) {
+      const labelIndex = labelPixels.data[i]; // grayscale source: R channel is the class index
+      if (labelIndex === 0 || !activeLabels.has(labelIndex)) continue; // 0 = background
+      const [r, g, b] = palette[labelIndex];
+      frame.data[i] = frame.data[i] * 0.35 + r * 0.65;
+      frame.data[i + 1] = frame.data[i + 1] * 0.35 + g * 0.65;
+      frame.data[i + 2] = frame.data[i + 2] * 0.35 + b * 0.65;
+    }
+    ctx.putImageData(frame, 0, 0);
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    status.textContent = "parsing... (the remote model can take a while on a cold start)";
+    output.hidden = true;
+
+    const body = new FormData();
+    body.append("image", importer.getFile());
+
+    let response;
+    try {
+      response = await fetch("/api/face-parse", { method: "POST", body });
+    } catch (err) {
+      status.textContent = `request failed: ${err}`;
+      return;
+    }
+
+    if (!response.ok) {
+      status.textContent = `server error: ${response.status}`;
+      return;
+    }
+
+    const result = await response.json();
+
+    let source, labelsImg;
+    try {
+      [source, labelsImg] = await Promise.all([
+        loadImage(`/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`),
+        loadImage(`/api/file/${result.labels_id}/download?t=${Date.now()}`),
+      ]);
+    } catch (err) {
+      status.textContent = `couldn't load the result images: ${err}`;
+      return;
+    }
+
+    sourceImage = source;
+    canvas.width = labelsImg.naturalWidth;
+    canvas.height = labelsImg.naturalHeight;
+
+    const labelCanvas = document.createElement("canvas");
+    labelCanvas.width = labelsImg.naturalWidth;
+    labelCanvas.height = labelsImg.naturalHeight;
+    const labelCtx = labelCanvas.getContext("2d");
+    labelCtx.drawImage(labelsImg, 0, 0);
+    labelPixels = labelCtx.getImageData(0, 0, labelCanvas.width, labelCanvas.height);
+
+    palette = labelPalette(result.label_names.length);
+    activeLabels.clear();
+
+    const present = Object.entries(result.label_counts)
+      .filter(([name]) => name !== "background")
+      .sort((a, b) => b[1] - a[1]);
+    present.forEach(([name]) => activeLabels.add(result.label_names.indexOf(name)));
+
+    legend.innerHTML = present
+      .map(([name, count]) => {
+        const index = result.label_names.indexOf(name);
+        const [r, g, b] = palette[index];
+        return `
+          <li class="legend-item">
+            <label>
+              <input type="checkbox" checked data-label-index="${index}" />
+              <span class="legend-swatch" style="background: rgb(${r},${g},${b})"></span>
+              <span class="legend-name">${labelize(name)}</span>
+            </label>
+            <span class="legend-count">${count.toLocaleString()} px</span>
+          </li>
+        `;
+      })
+      .join("");
+
+    legend.querySelectorAll("input[type=checkbox]").forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        const index = Number(checkbox.dataset.labelIndex);
+        if (checkbox.checked) activeLabels.add(index);
+        else activeLabels.delete(index);
+        redraw();
+      });
+    });
+
+    status.textContent = present.length ? "done" : "done - no face regions detected in this image";
+    output.hidden = false;
+    redraw();
+  });
+}
+
 setupViewTabs();
 setupInspect();
 setupMatchLook();
+setupFaceParsing();

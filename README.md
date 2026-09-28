@@ -56,11 +56,14 @@ Needs Python 3.12 - pinned deliberately rather than using whatever's newest on t
 
 ## Usage
 
-Run the API and UI:
+Run the API and UI (the face-parsing tab needs the deployed Modal endpoint URL - it's stable across redeploys, so this is a real, current value, not a placeholder to fill in):
 
 ```bash
-uv run uvicorn ai_prepress.api.main:app --reload
+AI_PREPRESS_FACE_PARSING_URL="https://vermeer-api-mngt--ai-prepress-face-parsing-faceparser-parse.modal.run" \
+  uv run uvicorn ai_prepress.api.main:app --reload
 ```
+
+Without that env var set, Inspect and Match Look work fine but the Face Parsing tab returns a 500 on submit - it's a required setting, not an optional one, once you're past the first two tabs.
 
 Open `http://127.0.0.1:8000` - it opens straight into Inspect. Drag an image onto the drop zone (or click to browse; TIFF, PNG, JPEG, WebP) and it fills in place with a preview, a filename/size chip, and replace/remove controls - the same import control is reused wherever the app needs an image in, including both slots in Match Look. Previews shown in the browser are downsized (1024px on the long edge) and JPEG-encoded before being sent over - on a 48-megapixel 16-bit TIFF that cut preview generation from a few seconds and a 129MB PNG down to well under 50ms and a few hundred KB. The stored result itself, reachable from the download link, keeps full bit depth and resolution.
 
@@ -115,6 +118,8 @@ under_eyes = result.mask_for("l_eye", "r_eye")
 ```
 
 The remote model only ever sees 8-bit RGB - it's a standard vision transformer, sending more precision than that wouldn't do anything - so the source image is deliberately downcast before it goes over the wire, not a silent loss. Ran it against a real portrait end to end (not just a synthetic test): label map came back the correct shape, with plausible per-class pixel counts across skin, hair, brows, lips, and both eyes.
+
+**Face Parsing tab in the UI**: upload a portrait, hit Parse. The server sends back the original preview plus a lossless, pre-downsampled label-index PNG (not a colored image - one pixel value per class, 0-18); the browser does all the actual visualization itself, compositing a color per region onto the photo in a `<canvas>`. The checkbox legend on the right toggles regions on and off - unchecking everything except the eyes isolates exactly what an eventual dark-circle correction would see, which is the point of building it this way rather than just returning a static picture. Toggling is instant since it's pure client-side canvas redraw, no extra request per click.
 
 ## Roadmap
 

@@ -24,6 +24,7 @@
     <nav class="pill-tabs" id="view-tabs">
       <button class="pill-tab" data-view="inspect" data-active="true">Inspect</button>
       <button class="pill-tab" data-view="match-look" data-active="false">Match Look</button>
+      <button class="pill-tab" data-view="face-parsing" data-active="false">Face Parsing</button>
     </nav>
   </header>
 
@@ -82,6 +83,30 @@
           </figure>
           <dl id="match-report" class="stat-list"></dl>
           <a id="match-download" class="btn btn-secondary" href="#">Download full-precision TIFF</a>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-face-parsing" class="view">
+      <div class="container-narrow">
+        <form id="face-form" class="card">
+          <div class="importer-slot">
+            <span class="t-eyebrow">Portrait</span>
+            <div id="face-import-mount" class="importer-box"></div>
+          </div>
+          <button type="submit" class="btn btn-primary" id="face-submit" disabled>Parse face</button>
+        </form>
+
+        <div id="face-status" class="status"></div>
+
+        <div id="face-output" class="card" hidden>
+          <div class="result-figure">
+            <canvas id="face-canvas"></canvas>
+            <figcaption class="t-caption">
+              non-commercial R&amp;D model (jonathandinu/face-parsing) - not for client-facing use, see README
+            </figcaption>
+          </div>
+          <ul id="face-legend" class="legend-list"></ul>
         </div>
       </div>
     </section>

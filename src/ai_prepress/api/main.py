@@ -22,6 +22,7 @@ from PIL import Image
 
 from ai_prepress import io as core_io
 from ai_prepress.checks import acceptance_report
+from ai_prepress.face_parsing import parse_face
 from ai_prepress.features.match_look import match_look
 from ai_prepress.metadata import describe
 
@@ -96,6 +97,36 @@ async def api_match_look(
             "delta_e_max": report.delta_e_max,
             "bit_depth_collapsed": report.bit_depth_collapsed,
             "icc_profile_present": report.icc_profile_present,
+        }
+    )
+
+
+@app.post("/api/face-parse")
+async def api_face_parse(image: UploadFile = File(...)):
+    """Non-commercial R&D placeholder - see README's Face Parsing section for why.
+
+    Returns the label map downsampled the same way /preview.jpg downsamples the source image
+    (same helper, same default max edge), so the two line up for the browser's canvas overlay
+    without it needing to reconcile two different resolutions."""
+    file_id = _store_upload(image)
+    loaded = core_io.load(_find_file(file_id))
+
+    result = parse_face(loaded)
+    small_labels = _downsample_for_preview(result.labels)
+
+    buffer = io.BytesIO()
+    Image.fromarray(small_labels, mode="L").save(buffer, format="PNG")
+    labels_id = _store_bytes(buffer.getvalue(), ".png")
+
+    values, counts = np.unique(result.labels, return_counts=True)
+    label_counts = {result.label_names[int(value)]: int(count) for value, count in zip(values, counts)}
+
+    return JSONResponse(
+        {
+            "file_id": file_id,
+            "labels_id": labels_id,
+            "label_names": result.label_names,
+            "label_counts": label_counts,
         }
     )
 
