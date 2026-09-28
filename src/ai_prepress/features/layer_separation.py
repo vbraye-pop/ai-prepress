@@ -36,8 +36,19 @@ class SeparatedLayers:
     layers: list[SeparatedLayer]
 
 
+BBOX_ALPHA_THRESHOLD = 127  # majority-opaque, not "any nonzero" - see below. Not underscore-
+# prefixed since api/main.py's alpha_coverage stat reuses it for the same reason.
+
 def _bbox_from_alpha(alpha: np.ndarray) -> tuple[int, int, int, int]:
-    coords = np.argwhere(alpha > 0)
+    """A real deployment against Qwen-Image-Layered (not a synthetic test fixture) showed the
+    model's own alpha output isn't clean binary - it carries widespread low-level noise (values
+    1-10) spread across nearly the whole frame, not just the object's own soft edge. `alpha > 0`
+    picked that noise up and blew the bbox out to cover almost the entire image on a real photo.
+    A majority-opacity threshold (>127) tracks the object's actual visible extent instead, while
+    compositing (separate_layers below) still uses the full soft alpha unclamped, since edge
+    softness is wanted there - this threshold is only for "where is this layer's content," not
+    for the alpha values a caller actually gets back."""
+    coords = np.argwhere(alpha > BBOX_ALPHA_THRESHOLD)
     if coords.size == 0:
         return (0, 0, 0, 0)
     y0, x0 = coords.min(axis=0)

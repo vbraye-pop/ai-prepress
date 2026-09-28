@@ -32,7 +32,7 @@ from ai_prepress.face_landmarks import (
     skin_region,
     under_eye_band,
 )
-from ai_prepress.features.layer_separation import separate_layers
+from ai_prepress.features.layer_separation import BBOX_ALPHA_THRESHOLD, separate_layers
 from ai_prepress.features.match_look import match_look
 from ai_prepress.features.retouch_faces import RetouchStrengths, retouch_faces
 from ai_prepress.metadata import describe
@@ -289,7 +289,7 @@ async def api_layer_separation(image: UploadFile = File(...)):
                 "layer_index": index,
                 "result_id": layer_id,
                 "bbox": layer.bbox,
-                "alpha_coverage": float((layer.image.array[..., 3] > 0).mean()),
+                "alpha_coverage": float((layer.image.array[..., 3] > BBOX_ALPHA_THRESHOLD).mean()),
             }
         )
 

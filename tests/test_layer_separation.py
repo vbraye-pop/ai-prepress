@@ -54,6 +54,22 @@ def test_separate_layers_derives_bbox_from_the_alpha_mask(monkeypatch):
     assert result.layers[0].bbox == (2, 2, 6, 6)
 
 
+def test_bbox_ignores_low_level_alpha_noise_spread_across_the_whole_frame(monkeypatch):
+    # a real deployment against Qwen-Image-Layered showed its alpha output isn't clean binary -
+    # it carries widespread low (1-10) values across nearly the whole frame, not just the
+    # object's own soft edge. A synthetic all-or-nothing fixture (like _canned_result's) can't
+    # catch a threshold bug this shape - it has to actually be noisy to reproduce it.
+    height, width = 20, 20
+    rng = np.random.default_rng(0)
+    alpha = rng.integers(1, 9, size=(height, width), dtype=np.uint8)  # noise everywhere
+    alpha[8:12, 8:12] = 255  # the one real, fully-opaque object
+    canned = LayerSeparationResult(background=np.full((height, width, 3), 100, dtype=np.uint8), layer_alphas=[alpha])
+    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None: canned)
+
+    result = separate_layers(_source_image(height, width))
+    assert result.layers[0].bbox == (8, 8, 12, 12)
+
+
 def test_separate_layers_background_is_8bit_and_untouched_by_source_bit_depth(monkeypatch):
     canned = _canned_result(8, 8)
     monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None: canned)
