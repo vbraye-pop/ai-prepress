@@ -84,10 +84,17 @@ def test_rasterize_mask_dilate_never_regrows_into_a_cutout():
     assert mask[50, 50] == pytest.approx(0.0)  # still excluded, even after a large dilate
 
 
-def _fake_landmarks() -> FaceLandmarks:
-    rng = np.random.default_rng(0)
-    points = rng.uniform(50, 250, size=(478, 2)).astype(np.float32)
+def _fake_landmarks(seed: int = 0, offset: tuple[float, float] = (0, 0)) -> FaceLandmarks:
+    rng = np.random.default_rng(seed)
+    points = rng.uniform(50, 250, size=(478, 2)).astype(np.float32) + np.array(offset, dtype=np.float32)
     return FaceLandmarks(points=points)
+
+
+def _fake_faces(n: int = 1) -> list[FaceLandmarks]:
+    # spaced along x so they're spatially distinct (and already left-to-right ordered, matching
+    # what detect_landmarks itself guarantees via _sort_left_to_right) - each a different seed
+    # so faces don't sit on identical point clouds
+    return [_fake_landmarks(seed=i, offset=(i * 400, 0)) for i in range(n)]
 
 
 def _fake_image(size=300) -> LoadedImage:
@@ -97,13 +104,13 @@ def _fake_image(size=300) -> LoadedImage:
 
 
 def test_retouch_faces_returns_none_when_no_face_detected(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: None)
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: [])
     result = retouch_faces(_fake_image(), RetouchStrengths(dark_circles=1.0))
     assert result is None
 
 
 def test_retouch_faces_is_a_no_op_at_zero_strength(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces())
     image = _fake_image()
     result = retouch_faces(image, RetouchStrengths())
     # LF + HF must reconstruct the original exactly when nothing edits LF - this is the
@@ -112,7 +119,7 @@ def test_retouch_faces_is_a_no_op_at_zero_strength(monkeypatch):
 
 
 def test_retouch_faces_leaves_pixels_far_from_any_region_unchanged(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces())
     image = _fake_image(size=300)
     result = retouch_faces(
         image, RetouchStrengths(dark_circles=1.0, even_skin=1.0, contouring=1.0)
@@ -125,7 +132,7 @@ def test_retouch_faces_leaves_pixels_far_from_any_region_unchanged(monkeypatch):
 
 
 def test_retouch_faces_fills_in_a_missing_icc_profile(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces())
     image = _fake_image()
     assert image.icc_profile is None
     result = retouch_faces(image, RetouchStrengths(dark_circles=0.5))
@@ -133,7 +140,7 @@ def test_retouch_faces_fills_in_a_missing_icc_profile(monkeypatch):
 
 
 def test_even_skin_texture_zero_matches_default_hf_retention(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces())
     image = _fake_image()
     with_texture_zero = retouch_faces(image, RetouchStrengths(even_skin=0.5, even_skin_texture=0.0))
     without_texture_field = retouch_faces(image, RetouchStrengths(even_skin=0.5))
@@ -141,7 +148,7 @@ def test_even_skin_texture_zero_matches_default_hf_retention(monkeypatch):
 
 
 def test_negative_even_skin_texture_lowers_local_variance_more_than_positive(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces())
     image = _fake_image()
     landmarks = _fake_landmarks()
     from ai_prepress.face_landmarks import skin_region
@@ -159,7 +166,7 @@ def test_negative_even_skin_texture_lowers_local_variance_more_than_positive(mon
 
 
 def test_retouch_faces_extreme_erode_degrades_to_a_safe_no_op(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces())
     image = _fake_image()
     # edge_amount is clamped to [-1, 1] and capped at half an eye-width in _edge_offset_px, so
     # -1 is already "as extreme as the API allows" - must not blow up _masked_regional_blur's
@@ -172,7 +179,7 @@ def test_retouch_faces_extreme_erode_degrades_to_a_safe_no_op(monkeypatch):
 
 
 def test_feather_amount_zero_gives_a_harder_edge_than_default(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces())
     image = _fake_image()
     hard = retouch_faces(image, RetouchStrengths(dark_circles=1.0, feather_amount=0.0))
     soft = retouch_faces(image, RetouchStrengths(dark_circles=1.0, feather_amount=1.0))
@@ -180,7 +187,7 @@ def test_feather_amount_zero_gives_a_harder_edge_than_default(monkeypatch):
 
 
 def test_retouch_faces_brightens_the_under_eye_region(monkeypatch):
-    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces())
     image = _fake_image()
     result = retouch_faces(image, RetouchStrengths(dark_circles=1.0))
     landmarks = _fake_landmarks()
@@ -189,3 +196,72 @@ def test_retouch_faces_brightens_the_under_eye_region(monkeypatch):
     band = under_eye_band(landmarks, "right")
     cy, cx = int(band[:, 1].mean()), int(band[:, 0].mean())
     assert result.array[cy, cx].mean() > image.array[cy, cx].mean()
+
+
+def test_retouch_faces_broadcasts_a_plain_strengths_to_every_face(monkeypatch):
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces(2))
+    image = _fake_image(size=700)
+    from ai_prepress.face_landmarks import under_eye_band
+
+    result = retouch_faces(image, RetouchStrengths(dark_circles=1.0))
+    for face in _fake_faces(2):
+        band = under_eye_band(face, "right")
+        cy, cx = int(band[:, 1].mean()), int(band[:, 0].mean())
+        assert result.array[cy, cx].mean() > image.array[cy, cx].mean()
+
+
+def test_retouch_faces_per_face_dict_only_edits_listed_faces(monkeypatch):
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces(2))
+    image = _fake_image(size=700)
+    from ai_prepress.face_landmarks import under_eye_band
+
+    result = retouch_faces(image, {0: RetouchStrengths(dark_circles=1.0)})
+    faces = _fake_faces(2)
+
+    band0 = under_eye_band(faces[0], "right")
+    cy0, cx0 = int(band0[:, 1].mean()), int(band0[:, 0].mean())
+    assert result.array[cy0, cx0].mean() > image.array[cy0, cx0].mean()
+
+    band1 = under_eye_band(faces[1], "right")
+    cy1, cx1 = int(band1[:, 1].mean()), int(band1[:, 0].mean())
+    assert np.allclose(result.array[cy1, cx1], image.array[cy1, cx1], atol=1e-3)
+
+
+def test_retouch_faces_out_of_range_face_index_raises(monkeypatch):
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: _fake_faces(1))
+    image = _fake_image()
+    with pytest.raises(ValueError):
+        retouch_faces(image, {5: RetouchStrengths(dark_circles=1.0)})
+
+
+def test_overlapping_faces_compose_sequentially_in_left_to_right_order(monkeypatch):
+    # characterization, not a correctness claim: two faces close enough to share pixels in a
+    # group photo apply their effects in left-to-right order over any overlap, the same
+    # order-dependent way Lightroom/Capture One's own stacked local-adjustment masks compose.
+    # This pins that documented behavior so it doesn't silently drift, rather than inventing new
+    # blend semantics for a case with no single correct answer.
+    overlapping = [_fake_landmarks(seed=0), _fake_landmarks(seed=0, offset=(5, 5))]
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb, max_faces=1: overlapping)
+    image = _fake_image(size=300)
+
+    sequential = retouch_faces(
+        image,
+        {0: RetouchStrengths(contouring=1.0), 1: RetouchStrengths(contouring=0.2)},
+    )
+    reversed_order = retouch_faces(
+        image,
+        {1: RetouchStrengths(contouring=0.2), 0: RetouchStrengths(contouring=1.0)},
+    )
+    # dict iteration order doesn't change processing order - retouch_faces always walks faces
+    # 0..N-1, so both calls above must produce identical output regardless of dict insertion order
+    assert np.allclose(sequential.array, reversed_order.array)
+
+
+def test_retouch_faces_accepts_pre_detected_landmarks_without_calling_detect(monkeypatch):
+    def _boom(rgb, max_faces=1):
+        raise AssertionError("should not re-detect when landmarks= is passed")
+
+    monkeypatch.setattr(retouch_module, "detect_landmarks", _boom)
+    image = _fake_image()
+    result = retouch_faces(image, RetouchStrengths(dark_circles=0.5), landmarks=_fake_faces())
+    assert result is not None

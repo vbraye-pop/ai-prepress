@@ -7,6 +7,7 @@ from ai_prepress.face_landmarks import (
     RIGHT_EYE_LOOP,
     FaceLandmarks,
     _convex_hull,
+    _sort_left_to_right,
     _walk_loop,
     cheek_region,
     forehead_region,
@@ -73,3 +74,19 @@ def test_cheek_and_forehead_regions_are_simple_polygons():
     for region in (cheek_region(landmarks, "right"), cheek_region(landmarks, "left"), forehead_region(landmarks)):
         assert region.shape[1] == 2
         assert len(region) >= 3
+
+
+def _landmarks_at(x_offset: float) -> FaceLandmarks:
+    points = np.zeros((478, 2), dtype=np.float32)
+    points[FACE_OVAL] = np.array([[x_offset, 0]] * len(FACE_OVAL), dtype=np.float32)
+    return FaceLandmarks(points=points)
+
+
+def test_sort_left_to_right_orders_by_face_oval_mean_x():
+    # MediaPipe gives no ordering guarantee across faces - fed in right-to-left here to prove
+    # the sort actually reorders rather than passing through whatever order it was given
+    right = _landmarks_at(500)
+    left = _landmarks_at(10)
+    middle = _landmarks_at(250)
+    ordered = _sort_left_to_right([right, middle, left])
+    assert [f.points[FACE_OVAL[0], 0] for f in ordered] == [10, 250, 500]

@@ -244,45 +244,97 @@ def _apply_contouring(lf: np.ndarray, mask: np.ndarray, strength: float) -> np.n
     return lf - mask[..., None] * shadow
 
 
-def retouch_faces(image: LoadedImage, strengths: RetouchStrengths) -> LoadedImage | None:
-    """Returns None if no face is detected - a photo without one is a real case the caller
-    should handle, not a hidden failure. LF/HF split runs once regardless of how many effects
-    are active; each active effect edits the shared LF layer. HF stays untouched except where
-    Even Skin's Texture control deliberately scales it (see RetouchStrengths.even_skin_texture)."""
-    unit = to_unit_float(image.array)[..., :3]
-    rgb_8bit = (np.clip(unit, 0.0, 1.0) * 255 + 0.5).astype(np.uint8)
-
-    landmarks = detect_landmarks(rgb_8bit)
-    if landmarks is None:
-        return None
-
-    height, width = unit.shape[:2]
-    face_width = np.linalg.norm(landmarks.subset([234])[0] - landmarks.subset([454])[0])
+def _apply_face(
+    lf: np.ndarray,
+    hf_multiplier: np.ndarray,
+    landmarks: FaceLandmarks,
+    strengths: RetouchStrengths,
+    shape: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """One face's worth of masked edits against the shared lf/hf_multiplier layers - factored
+    out of retouch_faces so the multi-face loop there is just "call this once per face" rather
+    than a second copy of the per-effect logic."""
     feather = _feather_radius(landmarks) * strengths.feather_amount
     edge = _edge_offset_px(landmarks, strengths.edge_amount)
 
-    lf_sigma = max(2.0, face_width * 0.05)
-    lf = _gaussian_blur(unit, lf_sigma)
-    hf = unit - lf
-    hf_multiplier = np.ones((height, width), dtype=np.float64)
-
     if strengths.dark_circles > 0:
         for side in ("right", "left"):
-            mask = rasterize_mask(under_eye_band(landmarks, side), (height, width), feather=feather, edge=edge)
+            mask = rasterize_mask(under_eye_band(landmarks, side), shape, feather=feather, edge=edge)
             lf = _apply_dark_circles(lf, mask, strengths.dark_circles)
 
     if strengths.even_skin > 0:
         oval, cutouts = skin_region(landmarks)
-        mask = rasterize_mask(oval, (height, width), cutouts=cutouts, feather=feather * 1.5, edge=edge)
+        mask = rasterize_mask(oval, shape, cutouts=cutouts, feather=feather * 1.5, edge=edge)
+        face_width = np.linalg.norm(landmarks.subset([234])[0] - landmarks.subset([454])[0])
+        lf_sigma = max(2.0, face_width * 0.05)
         regional = _masked_regional_blur(lf, mask, sigma=lf_sigma * 4)
         lf = _apply_even_skin(lf, mask, strengths.even_skin, regional)
         if strengths.even_skin_texture != 0:
-            hf_multiplier *= _texture_multiplier(mask, strengths.even_skin_texture)
+            hf_multiplier = hf_multiplier * _texture_multiplier(mask, strengths.even_skin_texture)
 
     if strengths.contouring > 0:
         for side in ("right", "left"):
-            mask = rasterize_mask(cheek_region(landmarks, side), (height, width), feather=feather, edge=edge)
+            mask = rasterize_mask(cheek_region(landmarks, side), shape, feather=feather, edge=edge)
             lf = _apply_contouring(lf, mask, strengths.contouring)
+
+    return lf, hf_multiplier
+
+
+def retouch_faces(
+    image: LoadedImage,
+    strengths: RetouchStrengths | dict[int, RetouchStrengths],
+    *,
+    max_faces: int = 32,
+    landmarks: list[FaceLandmarks] | None = None,
+) -> LoadedImage | None:
+    """Returns None if no face is detected - a photo without one is a real case the caller
+    should handle, not a hidden failure. A plain RetouchStrengths broadcasts to every detected
+    face (Capture One's "all faces" mode, and the only mode possible before this project could
+    detect more than one face); a dict[face_index, RetouchStrengths] edits only the listed faces
+    - an out-of-range index is a real bug (a UI sending a stale index after re-detection), so it
+    raises rather than being silently ignored. `landmarks=` lets a caller that already ran
+    detect_landmarks (the API layer, to share one detection across a preview call and an apply
+    call) skip re-running it here.
+
+    LF/HF split runs once regardless of face or effect count - it's a property of the whole
+    image's frequency content, not per-face state. Each face's masked edits are applied in
+    left-to-right order (see face_landmarks._sort_left_to_right); two faces close together in a
+    group photo compose sequentially over any overlapping pixels, the same order-dependent way
+    Lightroom/Capture One's own stacked local-adjustment masks compose - existing behavior
+    extended to N faces, not a new problem multi-face introduces. HF stays untouched except
+    where Even Skin's Texture control deliberately scales it (RetouchStrengths.even_skin_texture)."""
+    unit = to_unit_float(image.array)[..., :3]
+    height, width = unit.shape[:2]
+
+    if landmarks is None:
+        rgb_8bit = (np.clip(unit, 0.0, 1.0) * 255 + 0.5).astype(np.uint8)
+        landmarks = detect_landmarks(rgb_8bit, max_faces=max_faces)
+    if not landmarks:
+        return None
+
+    if isinstance(strengths, RetouchStrengths):
+        per_face = dict.fromkeys(range(len(landmarks)), strengths)
+    else:
+        bad_indices = [i for i in strengths if not (0 <= i < len(landmarks))]
+        if bad_indices:
+            raise ValueError(f"face index out of range (found {len(landmarks)} face(s)): {bad_indices}")
+        per_face = strengths
+
+    # one shared blur sigma for the whole image (see retouch_faces' docstring on why LF/HF
+    # stays a single pass) - averaged across every detected face rather than privileging
+    # whichever face happens to be leftmost, so a group photo with faces at different distances
+    # from the camera gets a representative middle-ground radius, not an arbitrary one
+    face_widths = [np.linalg.norm(f.subset([234])[0] - f.subset([454])[0]) for f in landmarks]
+    lf_sigma = max(2.0, float(np.mean(face_widths)) * 0.05)
+    lf = _gaussian_blur(unit, lf_sigma)
+    hf = unit - lf
+    hf_multiplier = np.ones((height, width), dtype=np.float64)
+
+    for face_index, face_landmarks in enumerate(landmarks):
+        face_strengths = per_face.get(face_index)
+        if face_strengths is None:
+            continue
+        lf, hf_multiplier = _apply_face(lf, hf_multiplier, face_landmarks, face_strengths, (height, width))
 
     result_unit = np.clip(lf + hf * hf_multiplier[..., None], 0.0, 1.0)
     icc_profile = image.icc_profile

@@ -45,26 +45,38 @@ class FaceLandmarks:
         return self.points[indices]
 
 
-def detect_landmarks(rgb: np.ndarray) -> FaceLandmarks | None:
+def _sort_left_to_right(faces: list[FaceLandmarks]) -> list[FaceLandmarks]:
+    """MediaPipe gives no documented ordering guarantee across faces (internal detection/
+    confidence order, not spatial) - sorting once here means face index 0 always means
+    "leftmost face in the photo," deterministically, rather than trusting raw model order for
+    something a UI needs to label stably ("Face 1" / "Face 2...") across repeated calls."""
+    return sorted(faces, key=lambda f: f.subset(FACE_OVAL)[:, 0].mean())
+
+
+def detect_landmarks(rgb: np.ndarray, max_faces: int = 1) -> list[FaceLandmarks]:
     """Runs locally - MediaPipe's own CPU path is fast enough that this doesn't need a Modal
     endpoint the way the SegFormer semantic parser did. Has its own built-in face detector, so
-    no separate crop step is needed first (unlike face_parsing.parse_portrait)."""
+    no separate crop step is needed first (unlike face_parsing.parse_portrait). Returns a list,
+    sorted left-to-right (see _sort_left_to_right), empty if no face is found - a photo without
+    one is a real case callers should handle, not something to special-case with None."""
     import mediapipe as mp
     from mediapipe.tasks.python import core, vision
 
     base_options = core.base_options.BaseOptions(model_asset_path=str(_model_path()))
     landmarker = vision.FaceLandmarker.create_from_options(
-        vision.FaceLandmarkerOptions(base_options=base_options, num_faces=1)
+        vision.FaceLandmarkerOptions(base_options=base_options, num_faces=max_faces)
     )
     height, width = rgb.shape[:2]
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
     result = landmarker.detect(mp_image)
     if not result.face_landmarks:
-        return None
+        return []
 
-    landmarks = result.face_landmarks[0]
-    points = np.array([[p.x * width, p.y * height] for p in landmarks], dtype=np.float32)
-    return FaceLandmarks(points=points)
+    faces = [
+        FaceLandmarks(points=np.array([[p.x * width, p.y * height] for p in lm], dtype=np.float32))
+        for lm in result.face_landmarks
+    ]
+    return _sort_left_to_right(faces)
 
 
 # ---------------------------------------------------------------------------------------------

@@ -19,10 +19,13 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
+from pydantic import BaseModel
 
 from ai_prepress import io as core_io
 from ai_prepress.checks import acceptance_report
 from ai_prepress.face_landmarks import (
+    FACE_OVAL,
+    FaceLandmarks,
     cheek_region,
     detect_landmarks,
     forehead_region,
@@ -32,6 +35,8 @@ from ai_prepress.face_landmarks import (
 from ai_prepress.features.match_look import match_look
 from ai_prepress.features.retouch_faces import RetouchStrengths, retouch_faces
 from ai_prepress.metadata import describe
+
+_MAX_FACES = 32  # matches Capture One's own documented per-image face-detection ceiling
 
 app = FastAPI(title="ai-prepress")
 
@@ -70,6 +75,48 @@ def _find_file(file_id: str) -> Path:
     if not matches:
         raise HTTPException(status_code=404, detail="no such file")
     return matches[0]
+
+
+# Detected landmarks are cached here so an "apply retouch" call can reuse the exact detection an
+# earlier "/api/face-regions" call already ran, rather than re-running MediaPipe (cost) or
+# risking a different face count/order on a second detection pass (correctness - face index 0 in
+# a per-face strengths payload must mean the same face at apply time it meant at preview time).
+# A SIBLING directory, not a same-directory "{file_id}.npy" file: _find_file's glob matches any
+# suffix after the first "." and returns matches[0] from unsorted glob order, so a landmark cache
+# file living next to the real upload would intermittently get returned as if it were the image.
+_LANDMARK_DIR = _STORE_DIR / "landmarks"
+_LANDMARK_DIR.mkdir(exist_ok=True)
+
+
+def _store_landmarks(file_id: str, faces: list[FaceLandmarks]) -> None:
+    stacked = np.stack([f.points for f in faces]) if faces else np.empty((0, 478, 2), dtype=np.float32)
+    np.save(_LANDMARK_DIR / f"{file_id}.npy", stacked)
+
+
+def _load_landmarks(file_id: str) -> list[FaceLandmarks]:
+    path = _LANDMARK_DIR / f"{file_id}.npy"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="no cached face detection for this file_id - call /api/face-regions first")
+    return [FaceLandmarks(points=pts) for pts in np.load(path)]
+
+
+class RetouchStrengthsPayload(BaseModel):
+    dark_circles: float = 0.0
+    even_skin: float = 0.0
+    even_skin_texture: float = 0.0
+    contouring: float = 0.0
+    feather_amount: float = 1.0
+    edge_amount: float = 0.0
+
+    def to_strengths(self) -> RetouchStrengths:
+        return RetouchStrengths(**self.model_dump())
+
+
+class RetouchApplyRequest(BaseModel):
+    file_id: str
+    mode: str  # "all_faces" | "per_face"
+    strengths: RetouchStrengthsPayload = RetouchStrengthsPayload()
+    per_face: dict[int, RetouchStrengthsPayload] = {}
 
 
 @app.post("/api/inspect")
@@ -117,18 +164,21 @@ async def api_face_regions(image: UploadFile = File(...)):
     endpoint: that scheme's 19 classes have no under-eye, cheek, or forehead class, which is
     what Retouch Faces' Dark Circles/Contouring sub-tools actually need a mask for.
 
-    Coordinates are returned already scaled to match /preview.jpg's downsampling (same stride,
-    same source image), so the browser can draw regions straight onto the preview it already
-    has with no extra reconciliation."""
+    Detects every face in the frame (Capture One detects up to 32 per image; matched here) and
+    caches the detection (_store_landmarks) so a later /api/retouch-faces/apply call reuses the
+    same faces in the same order rather than re-detecting. Coordinates are returned already
+    scaled to match /preview.jpg's downsampling (same stride, same source image), so the browser
+    can draw regions straight onto the preview it already has with no extra reconciliation."""
     file_id = _store_upload(image)
     loaded = core_io.load(_find_file(file_id))
 
     unit = core_io.to_unit_float(loaded.array)[..., :3]
     rgb_8bit = (np.clip(unit, 0.0, 1.0) * 255 + 0.5).astype(np.uint8)
 
-    landmarks = detect_landmarks(rgb_8bit)
-    if landmarks is None:
-        return JSONResponse({"file_id": file_id, "face_detected": False, "regions": {}})
+    faces = detect_landmarks(rgb_8bit, max_faces=_MAX_FACES)
+    _store_landmarks(file_id, faces)
+    if not faces:
+        return JSONResponse({"file_id": file_id, "face_detected": False, "face_count": 0, "faces": []})
 
     height, width = rgb_8bit.shape[:2]
     stride = _preview_stride(height, width)
@@ -136,37 +186,56 @@ async def api_face_regions(image: UploadFile = File(...)):
     def scaled(points) -> list[list[float]]:
         return (np.asarray(points) / stride).round(1).tolist()
 
-    oval, cutouts = skin_region(landmarks)
-    regions = {
-        "skin_oval": scaled(oval),
-        "skin_cutouts": [scaled(c) for c in cutouts],
-        "forehead": scaled(forehead_region(landmarks)),
-        "cheek_right": scaled(cheek_region(landmarks, "right")),
-        "cheek_left": scaled(cheek_region(landmarks, "left")),
-        "under_eye_right": scaled(under_eye_band(landmarks, "right")),
-        "under_eye_left": scaled(under_eye_band(landmarks, "left")),
-    }
-    return JSONResponse({"file_id": file_id, "face_detected": True, "regions": regions})
+    faces_payload = []
+    for index, landmarks in enumerate(faces):
+        oval, cutouts = skin_region(landmarks)
+        face_oval_points = landmarks.subset(FACE_OVAL)
+        x0, y0 = face_oval_points.min(axis=0)
+        x1, y1 = face_oval_points.max(axis=0)
+        faces_payload.append(
+            {
+                "face_index": index,
+                "bbox": scaled([[x0, y0], [x1, y1]]),
+                "regions": {
+                    "skin_oval": scaled(oval),
+                    "skin_cutouts": [scaled(c) for c in cutouts],
+                    "forehead": scaled(forehead_region(landmarks)),
+                    "cheek_right": scaled(cheek_region(landmarks, "right")),
+                    "cheek_left": scaled(cheek_region(landmarks, "left")),
+                    "under_eye_right": scaled(under_eye_band(landmarks, "right")),
+                    "under_eye_left": scaled(under_eye_band(landmarks, "left")),
+                },
+            }
+        )
+
+    return JSONResponse(
+        {"file_id": file_id, "face_detected": True, "face_count": len(faces), "faces": faces_payload}
+    )
 
 
-@app.post("/api/retouch-faces")
-async def api_retouch_faces(
-    image: UploadFile = File(...),
-    dark_circles: float = Form(0.0),
-    even_skin: float = Form(0.0),
-    contouring: float = Form(0.0),
-):
+@app.post("/api/retouch-faces/apply")
+async def api_retouch_faces_apply(request: RetouchApplyRequest):
     """Low-frequency masked edits on top of the face-region masks - see
-    ai_prepress.features.retouch_faces for the frequency-separation approach and why the
-    high-frequency texture layer is never touched. Strengths are 0-1; the UI sends 0-100
-    slider values divided by 100."""
-    file_id = _store_upload(image)
-    loaded = core_io.load(_find_file(file_id))
+    ai_prepress.features.retouch_faces for the frequency-separation approach. Takes a file_id
+    from an earlier /api/face-regions call (not a fresh upload) so it can reuse that call's exact
+    detection via _load_landmarks - mode "all_faces" broadcasts `strengths` to every detected
+    face, "per_face" edits only the faces present in `per_face`."""
+    loaded = core_io.load(_find_file(request.file_id))
+    faces = _load_landmarks(request.file_id)
 
-    strengths = RetouchStrengths(dark_circles=dark_circles, even_skin=even_skin, contouring=contouring)
-    result = retouch_faces(loaded, strengths)
+    if request.mode == "per_face":
+        strengths: RetouchStrengths | dict[int, RetouchStrengths] = {
+            index: payload.to_strengths() for index, payload in request.per_face.items()
+        }
+    else:
+        strengths = request.strengths.to_strengths()
+
+    try:
+        result = retouch_faces(loaded, strengths, landmarks=faces)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result is None:
-        return JSONResponse({"file_id": file_id, "face_detected": False})
+        return JSONResponse({"file_id": request.file_id, "face_detected": False})
 
     result_id = _store_bytes(b"", ".tiff")
     core_io.save(result, _find_file(result_id))
@@ -175,9 +244,10 @@ async def api_retouch_faces(
 
     return JSONResponse(
         {
-            "file_id": file_id,
+            "file_id": request.file_id,
             "result_id": result_id,
             "face_detected": True,
+            "face_count": len(faces),
             "delta_e_mean": report.delta_e_mean,
             "delta_e_max": report.delta_e_max,
             "bit_depth_collapsed": report.bit_depth_collapsed,
