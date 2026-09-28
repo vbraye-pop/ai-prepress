@@ -730,7 +730,9 @@ function setupLayerSeparation() {
     for (const layer of result.layers) {
       built.push({
         kind: "layer",
-        label: `Layer ${layer.layer_index + 1}`,
+        // pre-filled from layer_naming (InternVL3.5-2B) when it succeeded - falls back to the
+        // generic placeholder if naming failed or wasn't run, same manual rename field either way
+        label: layer.suggested_name || `Layer ${layer.layer_index + 1}`,
         resultId: layer.result_id,
         visible: true,
         image: null,
