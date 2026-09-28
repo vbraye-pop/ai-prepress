@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from PIL import ImageCms
 
 import ai_prepress.features.layer_separation as layer_separation_module
@@ -24,10 +25,26 @@ def _canned_result(height, width) -> LayerSeparationResult:
     return LayerSeparationResult(background=background, layer_alphas=[alpha])
 
 
+@pytest.fixture(autouse=True)
+def _default_enhancement_mocks(monkeypatch):
+    """object_count and layer_naming are real calls now too - default every test to a working,
+    uninteresting mock for both so tests that only care about the core compositing logic don't
+    need to know about either. Tests that specifically exercise count/naming behavior override
+    these within their own body (a later monkeypatch.setattr in the same test wins)."""
+    monkeypatch.setattr(layer_separation_module.object_count, "count_objects", lambda image: 1)
+    monkeypatch.setattr(
+        layer_separation_module.layer_naming,
+        "name_layers",
+        lambda layers: [None] * len(layers),
+    )
+
+
 def test_separate_layers_preserves_source_bit_depth_and_rgb_values(monkeypatch):
     source = _source_image()
     canned = _canned_result(8, 8)
-    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None: canned)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
 
     result = separate_layers(source)
 
@@ -48,7 +65,9 @@ def test_separate_layers_preserves_source_bit_depth_and_rgb_values(monkeypatch):
 
 def test_separate_layers_derives_bbox_from_the_alpha_mask(monkeypatch):
     canned = _canned_result(8, 8)
-    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None: canned)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
 
     result = separate_layers(_source_image())
     assert result.layers[0].bbox == (2, 2, 6, 6)
@@ -64,7 +83,9 @@ def test_bbox_ignores_low_level_alpha_noise_spread_across_the_whole_frame(monkey
     alpha = rng.integers(1, 9, size=(height, width), dtype=np.uint8)  # noise everywhere
     alpha[8:12, 8:12] = 255  # the one real, fully-opaque object
     canned = LayerSeparationResult(background=np.full((height, width, 3), 100, dtype=np.uint8), layer_alphas=[alpha])
-    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None: canned)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
 
     result = separate_layers(_source_image(height, width))
     assert result.layers[0].bbox == (8, 8, 12, 12)
@@ -72,7 +93,9 @@ def test_bbox_ignores_low_level_alpha_noise_spread_across_the_whole_frame(monkey
 
 def test_separate_layers_background_is_8bit_and_untouched_by_source_bit_depth(monkeypatch):
     canned = _canned_result(8, 8)
-    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None: canned)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
 
     result = separate_layers(_source_image())
     assert result.background.array.dtype == np.uint8
@@ -82,7 +105,9 @@ def test_separate_layers_background_is_8bit_and_untouched_by_source_bit_depth(mo
 
 def test_separate_layers_falls_back_to_srgb_when_source_has_no_profile(monkeypatch):
     canned = _canned_result(8, 8)
-    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None: canned)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
 
     source = _source_image()
     source.icc_profile = None
@@ -93,7 +118,83 @@ def test_separate_layers_falls_back_to_srgb_when_source_has_no_profile(monkeypat
 
 def test_separate_layers_returns_empty_list_when_nothing_is_separable(monkeypatch):
     empty = LayerSeparationResult(background=np.full((8, 8, 3), 50, dtype=np.uint8), layer_alphas=[])
-    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None: empty)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: empty
+    )
 
     result = separate_layers(_source_image())
     assert result.layers == []
+
+
+# --- automatic layer count -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "object_count_value,expected_layers",
+    [
+        (0, 2),  # clamped up to MIN_LAYERS even for "nothing detected"
+        (1, 2),
+        (3, 4),
+        (10, 8),  # clamped down to MAX_LAYERS
+    ],
+)
+def test_separate_layers_computes_layers_from_object_count(monkeypatch, object_count_value, expected_layers):
+    captured = {}
+    canned = _canned_result(8, 8)
+
+    def fake_decompose(image, endpoint=None, layers=None):
+        captured["layers"] = layers
+        return canned
+
+    monkeypatch.setattr(layer_separation_module.object_count, "count_objects", lambda image: object_count_value)
+    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", fake_decompose)
+
+    separate_layers(_source_image())
+    assert captured["layers"] == expected_layers
+
+
+def test_separate_layers_falls_back_to_a_fixed_layer_count_if_object_count_fails(monkeypatch):
+    captured = {}
+    canned = _canned_result(8, 8)
+
+    def fake_decompose(image, endpoint=None, layers=None):
+        captured["layers"] = layers
+        return canned
+
+    def failing_count(image):
+        raise RuntimeError("endpoint down")
+
+    monkeypatch.setattr(layer_separation_module.object_count, "count_objects", failing_count)
+    monkeypatch.setattr(layer_separation_module.layer_decompose, "decompose_layers", fake_decompose)
+
+    separate_layers(_source_image())  # must not raise
+    assert captured["layers"] == layer_separation_module.FALLBACK_LAYER_COUNT
+
+
+# --- automatic layer naming -----------------------------------------------------------------
+
+
+def test_separate_layers_attaches_suggested_names(monkeypatch):
+    canned = _canned_result(8, 8)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
+    monkeypatch.setattr(layer_separation_module.layer_naming, "name_layers", lambda layers: ["Mug"])
+
+    result = separate_layers(_source_image())
+    assert result.layers[0].suggested_name == "Mug"
+
+
+def test_separate_layers_suggested_name_is_none_if_naming_fails(monkeypatch):
+    canned = _canned_result(8, 8)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
+
+    def failing_name(layers):
+        raise RuntimeError("endpoint down")
+
+    monkeypatch.setattr(layer_separation_module.layer_naming, "name_layers", failing_name)
+
+    result = separate_layers(_source_image())  # must not raise
+    assert result.layers[0].suggested_name is None

@@ -11,6 +11,16 @@ full-precision RGB (this project's whole identity is never silently collapsing b
 higher-fidelity source already exists for every non-occluded layer pixel). Only the background
 plate is genuinely novel content - reconstructed pixels with no source data behind them - so it
 stays honestly 8-bit, a documented exception rather than an implicit gap.
+
+Two more remote models sit around the main decomposition call, both explicitly ENHANCEMENTS over
+a working fallback, never hard dependencies of it - a bad day for either one must never take down
+the core separation result:
+- ai_prepress.object_count (SAM2) estimates how many distinct objects are in the photo BEFORE
+  decomposing, so `layers` is sized per-photo instead of a fixed constant. If it fails for any
+  reason, falls back to FALLBACK_LAYER_COUNT (today's old hardcoded default).
+- ai_prepress.layer_naming (InternVL3.5-2B) suggests a short label per layer AFTER decomposing,
+  to pre-fill the UI's rename field. If it fails for any reason, every layer's `suggested_name`
+  is just None and the UI falls back to its existing generic "Layer N" placeholder.
 """
 
 from __future__ import annotations
@@ -20,14 +30,22 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import ImageCms
 
-from ai_prepress import layer_decompose
+from ai_prepress import layer_decompose, layer_naming, object_count
 from ai_prepress.io import LoadedImage, from_unit_float, to_unit_float
+
+MIN_LAYERS = 2
+MAX_LAYERS = 8
+# first-cut bounds on the auto-computed layer count, correct against real photos like every
+# other untested numeric constant this project has shipped and then measured
+FALLBACK_LAYER_COUNT = 4  # today's old hardcoded default - now only reached if object-counting
+# itself fails, not the normal path
 
 
 @dataclass
 class SeparatedLayer:
     image: LoadedImage  # (H, W, 4), dtype matches the source image's own bit depth
     bbox: tuple[int, int, int, int]  # (x0, y0, x1, y1), derived from the alpha mask's own extent
+    suggested_name: str | None = None  # from layer_naming - None if naming failed or wasn't run
 
 
 @dataclass
@@ -56,11 +74,22 @@ def _bbox_from_alpha(alpha: np.ndarray) -> tuple[int, int, int, int]:
     return (int(x0), int(y0), int(x1) + 1, int(y1) + 1)
 
 
+def _estimate_layer_count(image: LoadedImage) -> int:
+    try:
+        estimated_objects = object_count.count_objects(image)
+    except Exception:
+        # object-counting is an enhancement over a fixed default, never a hard dependency of
+        # separation itself - a down/erroring endpoint must not fail the whole request
+        return FALLBACK_LAYER_COUNT
+    return max(MIN_LAYERS, min(MAX_LAYERS, estimated_objects + 1))  # +1 for the background plate
+
+
 def separate_layers(image: LoadedImage, endpoint: str | None = None) -> SeparatedLayers:
     """Returns every remote-detected layer as a full-precision RGBA LoadedImage, plus the
     background plate. Never returns None - unlike retouch_faces' "no face found" case, a photo
     with nothing separable just comes back with an empty `layers` list, still a valid result."""
-    decomposed = layer_decompose.decompose_layers(image, endpoint=endpoint)
+    layers_requested = _estimate_layer_count(image)
+    decomposed = layer_decompose.decompose_layers(image, endpoint=endpoint, layers=layers_requested)
 
     icc_profile = image.icc_profile
     if icc_profile is None:
@@ -79,6 +108,15 @@ def separate_layers(image: LoadedImage, endpoint: str | None = None) -> Separate
             bit_depth=image.bit_depth,
         )
         layers.append(SeparatedLayer(image=layer_image, bbox=_bbox_from_alpha(alpha)))
+
+    try:
+        suggested_names = layer_naming.name_layers([layer.image for layer in layers])
+    except Exception:
+        # naming is cosmetic - it only ever pre-fills a rename field the UI already has, so a
+        # failure here must not take down an otherwise-successful separation
+        suggested_names = [None] * len(layers)
+    for layer, name in zip(layers, suggested_names):
+        layer.suggested_name = name
 
     background = LoadedImage(array=decomposed.background, icc_profile=icc_profile, bit_depth=8)
     return SeparatedLayers(background=background, layers=layers)
