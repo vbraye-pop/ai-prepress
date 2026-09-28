@@ -141,10 +141,10 @@ No scipy, and PIL's `GaussianBlur` flatly refuses float-mode images (confirmed b
 - [x] Image inspection (dimensions, bit depth, real ICC profile + guess, EXIF, raw tags)
 - [x] Match Look
 - [ ] pywebview desktop shell around the current FastAPI + HTML UI
-- [ ] Shared segmentation backend (SAM3 + BiRefNet), feeds masking, AI crop, and background cutout
+- [ ] **Segmentation + layer separation suite (current priority)** - input one photo, output every distinct object/subject as its own usable layer (alpha matte) plus a filled/completed background plate (the area behind removed objects reconstructed, not left as a hole). Expands the earlier "shared segmentation backend (SAM3 + BiRefNet), feeds masking/AI crop/background cutout" line into its own full feature - research in progress (multi-object layer separation quality, background hole-filling inpainting, practical layer export format given this project's own 16-bit TIFF/ICC discipline and the confirmed-unreliable open-source PSD-write situation).
 - [ ] AI Crop
 - [x] Face regions (`ai_prepress.face_landmarks`, local MediaPipe) - supersedes the earlier Modal-deployed semantic parser, see above. `deploy/face_parsing.py` and `ai_prepress.face_parsing` are still in the repo (real, tested, still deployed) but no longer wired into the UI.
-- [x] Retouch Faces - Dark Circles/Even Skin/Contouring via LF/HF split on the face-region masks, see above. Blemish removal still needs Inpaint-Anything, not built yet.
+- [x] Retouch Faces - Dark Circles/Even Skin/Contouring via LF/HF split on the face-region masks, Eye Whiten/Teeth Whiten/Lip Enhance via direct HSL grades, multi-face support, mask Feather/Edge reshape - see above. Blemish removal and manual mask-brush editing still open, not built yet.
 - [x] Dust removal training-data synthesizer (`training/dust_removal/`)
 - [ ] Dust Removal (RF-DETR fine-tune on the synthetic data, then the fill step)
 - [ ] Background Replacement
