@@ -275,6 +275,23 @@ a.btn {
   color: var(--ink-soft);
 }
 
+/* .legend-item-main (checkbox + thumbnail + rename input) is the side that gives up space when
+   the row is tight - `min-width: 0` is required for a flex child to shrink below its content's
+   intrinsic width at all, a real flexbox gotcha, not optional polish (without it the rename
+   input refused to shrink and pushed .legend-item-side, including the Download link, off the
+   edge of the panel - inconsistently per row, since a row's exact overflow depended on incidental
+   content width like the coverage badge's digit count). .legend-item-side never shrinks - it's
+   short and important (the coverage badge and Download link should never be the thing that
+   silently clips). */
+.legend-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.legend-item-side {
+  flex: 0 0 auto;
+}
+
 .legend-swatch {
   width: 12px;
   height: 12px;
@@ -307,6 +324,8 @@ a.btn {
 
 .legend-name-input {
   width: 96px;
+  min-width: 0;
+  flex: 1 1 auto;
   height: 22px;
   padding: 0 4px;
   background: transparent;
@@ -404,6 +423,9 @@ a.btn {
 
 .layer-sep-coverage {
   margin-left: 6px;
+  min-width: 30px;
+  text-align: center;
+  flex: 0 0 auto;
 }
 
 .layer-sep-divider {
