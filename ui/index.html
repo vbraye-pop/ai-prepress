@@ -88,26 +88,29 @@
     </section>
 
     <section id="view-face-parsing" class="view">
-      <div class="container-narrow">
-        <form id="face-form" class="card">
-          <div class="importer-slot">
-            <span class="t-eyebrow">Portrait</span>
-            <div id="face-import-mount" class="importer-box"></div>
-          </div>
-          <button type="submit" class="btn btn-primary" id="face-submit" disabled>Parse face</button>
-        </form>
-
-        <div id="face-status" class="status"></div>
-
-        <div id="face-output" class="card" hidden>
-          <div class="result-figure">
+      <div class="workspace">
+        <div class="viewport-slot">
+          <div id="face-import-mount" class="importer-box"></div>
+          <button type="button" class="btn btn-primary face-submit" id="face-submit" disabled>Parse face</button>
+          <div id="face-canvas-wrap" class="face-canvas-wrap" hidden>
             <canvas id="face-canvas"></canvas>
-            <figcaption class="t-caption">
+            <p class="t-caption">
               non-commercial R&amp;D model (jonathandinu/face-parsing) - not for client-facing use, see README
-            </figcaption>
+            </p>
           </div>
-          <ul id="face-legend" class="legend-list"></ul>
         </div>
+        <aside class="inspector-panel">
+          <div class="inspector-head">
+            <span class="t-eyebrow">Regions</span>
+          </div>
+          <p id="face-placeholder" class="t-caption">Import a portrait and click Parse to see detected face regions.</p>
+          <div id="face-status" class="status"></div>
+          <div id="face-opacity-row" class="opacity-row" hidden>
+            <label for="face-opacity" class="t-caption">Overlay opacity</label>
+            <input type="range" id="face-opacity" min="10" max="90" value="45" />
+          </div>
+          <ul id="face-legend" class="legend-list" hidden></ul>
+        </aside>
       </div>
     </section>
   </main>

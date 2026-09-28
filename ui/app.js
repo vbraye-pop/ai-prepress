@@ -182,27 +182,72 @@ function loadImage(src) {
   });
 }
 
-// evenly-spaced hues rather than a hand-picked palette - guarantees every label gets a
-// visually distinct color regardless of how many of the 19 classes actually show up
-function hslToRgb(hue, saturationPct, lightnessPct) {
-  const s = saturationPct / 100;
-  const l = lightnessPct / 100;
-  const k = (n) => (n + hue / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-  return [Math.round(255 * f(0)), Math.round(255 * f(8)), Math.round(255 * f(4))];
+// matplotlib's tab20, https://matplotlib.org/stable/gallery/color/colormap_reference.html -
+// 10 hue families, each a [saturated, light] pair. Replaces an earlier hue-rotation formula
+// that turned out to be the same "garish, unrelated colors" mistake baked into the reference
+// face-parsing repo's own visualization code (zllrunning/face-parsing.PyTorch's vis_parsing_maps
+// uses the same kind of raw hue-cycle) - not a one-off bug, a known failure mode in this space.
+const TAB20 = [
+  "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a",
+  "#d62728", "#ff9896", "#9467bd", "#c5b0d5", "#8c564b", "#c49c94",
+  "#e377c2", "#f7b6d2", "#7f7f7f", "#c7c7c7", "#bcbd22", "#dbdb8d",
+  "#17becf", "#9edae5",
+];
+
+// hand-assigned rather than palette[index] - pairs bilateral and otherwise-related regions
+// onto the same hue family's saturated/light slots (l_eye+r_eye, l_ear+r_ear, l_brow+r_brow,
+// u_lip+l_lip, hair+hat, ear_r+neck_l as "accessories") so related parts read as connected
+// instead of random. "background" is deliberately absent - it's never drawn.
+const LABEL_COLOR_SLOT = {
+  l_eye: 0, r_eye: 1,
+  skin: 2, neck: 3,
+  l_ear: 4, r_ear: 5,
+  u_lip: 6, l_lip: 7,
+  l_brow: 8, r_brow: 9,
+  hair: 10, hat: 11,
+  mouth: 12, nose: 13,
+  cloth: 14,
+  ear_r: 16, neck_l: 17,
+  eye_g: 18,
+};
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-function labelPalette(count) {
-  return Array.from({ length: count }, (_, i) => hslToRgb(Math.round((360 * i) / count), 70, 55));
+function buildPalette(labelNames) {
+  return labelNames.map((name) => {
+    const slot = LABEL_COLOR_SLOT[name];
+    return slot === undefined ? [122, 122, 122] : hexToRgb(TAB20[slot]);
+  });
+}
+
+// marks pixels whose right or down neighbor has a different label - cheap single pass,
+// checking two of four neighbors is enough to catch every boundary edge somewhere in the scan
+function computeBoundaryMask(labelPixels, width, height) {
+  const data = labelPixels.data;
+  const at = (x, y) => data[(y * width + x) * 4];
+  const mask = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const here = at(x, y);
+      const right = x + 1 < width ? at(x + 1, y) : here;
+      const down = y + 1 < height ? at(x, y + 1) : here;
+      mask[y * width + x] = here !== right || here !== down ? 1 : 0;
+    }
+  }
+  return mask;
 }
 
 function setupFaceParsing() {
-  const form = document.getElementById("face-form");
   const submitButton = document.getElementById("face-submit");
+  const placeholder = document.getElementById("face-placeholder");
   const status = document.getElementById("face-status");
-  const output = document.getElementById("face-output");
+  const canvasWrap = document.getElementById("face-canvas-wrap");
   const canvas = document.getElementById("face-canvas");
+  const opacityRow = document.getElementById("face-opacity-row");
+  const opacitySlider = document.getElementById("face-opacity");
   const legend = document.getElementById("face-legend");
 
   const importer = createImageImport({
@@ -214,37 +259,71 @@ function setupFaceParsing() {
   });
   document.getElementById("face-import-mount").appendChild(importer.el);
 
-  let sourceImage = null; // the uploaded photo, redrawn under the overlay on every toggle
+  let sourceImage = null; // the uploaded photo, redrawn under the overlay on every change
   let labelPixels = null; // ImageData of the (downsampled, lossless) label-index map
+  let boundaryMask = null; // precomputed once per result, not per redraw - see computeBoundaryMask
   let palette = [];
+  let hoveredIndex = null; // set while a legend row is hovered, dims every other active region
   const activeLabels = new Set();
 
-  // draws from scratch every time rather than patching pixels incrementally - simpler to get
-  // right, and a few hundred thousand pixels is well under a frame even on modest hardware
+  function fillAlpha() {
+    return Number(opacitySlider.value) / 100;
+  }
+
+  // fill + a darker same-hue outline on boundary pixels, matching how detectron2's visualizer
+  // pairs alpha fill with a full-opacity edge rather than flat fill alone (which is the "garish
+  // paint bucket" look the first version had). Hovering a legend row pops that one region and
+  // dims the rest instead of hiding them outright, so context isn't lost while isolating one.
   function redraw() {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
     if (!labelPixels) return;
 
+    const base = fillAlpha();
     const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    for (let i = 0; i < labelPixels.data.length; i += 4) {
-      const labelIndex = labelPixels.data[i]; // grayscale source: R channel is the class index
+    for (let p = 0; p < labelPixels.data.length; p += 4) {
+      const labelIndex = labelPixels.data[p]; // grayscale source: R channel is the class index
       if (labelIndex === 0 || !activeLabels.has(labelIndex)) continue; // 0 = background
+
+      const isBoundary = boundaryMask[p / 4] === 1;
+      let alpha = isBoundary ? Math.min(1, base + 0.4) : base;
+      if (hoveredIndex !== null) {
+        alpha = labelIndex === hoveredIndex ? Math.min(1, alpha + 0.25) : alpha * 0.2;
+      }
+
       const [r, g, b] = palette[labelIndex];
-      frame.data[i] = frame.data[i] * 0.35 + r * 0.65;
-      frame.data[i + 1] = frame.data[i + 1] * 0.35 + g * 0.65;
-      frame.data[i + 2] = frame.data[i + 2] * 0.35 + b * 0.65;
+      const shade = isBoundary ? 0.7 : 1; // darker outline, same hue as the fill
+      frame.data[p] = frame.data[p] * (1 - alpha) + r * shade * alpha;
+      frame.data[p + 1] = frame.data[p + 1] * (1 - alpha) + g * shade * alpha;
+      frame.data[p + 2] = frame.data[p + 2] * (1 - alpha) + b * shade * alpha;
     }
     ctx.putImageData(frame, 0, 0);
   }
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  let redrawQueued = false;
+  function requestRedraw() {
+    if (redrawQueued) return;
+    redrawQueued = true;
+    requestAnimationFrame(() => {
+      redrawQueued = false;
+      redraw();
+    });
+  }
+
+  opacitySlider.addEventListener("input", requestRedraw);
+
+  submitButton.addEventListener("click", async () => {
+    const file = importer.getFile();
+    if (!file) return;
+
     status.textContent = "parsing... (the remote model can take a while on a cold start)";
-    output.hidden = true;
+    placeholder.hidden = true;
+    canvasWrap.hidden = true;
+    opacityRow.hidden = true;
+    legend.hidden = true;
 
     const body = new FormData();
-    body.append("image", importer.getFile());
+    body.append("image", file);
 
     let response;
     try {
@@ -282,9 +361,11 @@ function setupFaceParsing() {
     const labelCtx = labelCanvas.getContext("2d");
     labelCtx.drawImage(labelsImg, 0, 0);
     labelPixels = labelCtx.getImageData(0, 0, labelCanvas.width, labelCanvas.height);
+    boundaryMask = computeBoundaryMask(labelPixels, canvas.width, canvas.height);
 
-    palette = labelPalette(result.label_names.length);
+    palette = buildPalette(result.label_names);
     activeLabels.clear();
+    hoveredIndex = null;
 
     const present = Object.entries(result.label_counts)
       .filter(([name]) => name !== "background")
@@ -296,7 +377,7 @@ function setupFaceParsing() {
         const index = result.label_names.indexOf(name);
         const [r, g, b] = palette[index];
         return `
-          <li class="legend-item">
+          <li class="legend-item" data-label-index="${index}">
             <label>
               <input type="checkbox" checked data-label-index="${index}" />
               <span class="legend-swatch" style="background: rgb(${r},${g},${b})"></span>
@@ -317,8 +398,22 @@ function setupFaceParsing() {
       });
     });
 
+    legend.querySelectorAll(".legend-item").forEach((item) => {
+      const index = Number(item.dataset.labelIndex);
+      item.addEventListener("mouseenter", () => {
+        hoveredIndex = index;
+        redraw();
+      });
+      item.addEventListener("mouseleave", () => {
+        hoveredIndex = null;
+        redraw();
+      });
+    });
+
     status.textContent = present.length ? "done" : "done - no face regions detected in this image";
-    output.hidden = false;
+    canvasWrap.hidden = false;
+    opacityRow.hidden = false;
+    legend.hidden = false;
     redraw();
   });
 }

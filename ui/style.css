@@ -187,13 +187,43 @@ a.btn {
 }
 
 /* ── Face Parsing ────────────────────────────────────────────────────── */
-.result-figure canvas {
+.face-submit {
+  margin-top: var(--s-sm);
+}
+
+.face-canvas-wrap {
+  margin-top: var(--s-lg);
+  text-align: center;
+}
+
+.face-canvas-wrap canvas {
+  /* primary content here, not a small result thumbnail (contrast with Match Look's
+     320px-capped preview) - sized generously but capped so a portrait-oriented photo
+     can't push the rest of the page off screen the way the first version did */
   max-width: 100%;
+  max-height: 640px;
+  width: auto;
   height: auto;
   border: 1px solid var(--hairline);
   border-radius: var(--r-md);
   display: inline-block;
   background: var(--surface-sunken);
+}
+
+.face-canvas-wrap p {
+  margin-top: 6px;
+}
+
+.opacity-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: var(--s-sm) 0 var(--s-md);
+}
+
+.opacity-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--primary);
 }
 
 .legend-list {
@@ -202,7 +232,8 @@ a.btn {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
+  overflow-y: auto;
 }
 
 .legend-item {
@@ -210,6 +241,14 @@ a.btn {
   align-items: center;
   justify-content: space-between;
   gap: var(--s-sm);
+  padding: 4px 6px;
+  margin: 0 -6px;
+  border-radius: var(--r-sm);
+  transition: background-color .12s ease;
+}
+
+.legend-item:hover {
+  background: var(--surface-raised);
 }
 
 .legend-item label {
