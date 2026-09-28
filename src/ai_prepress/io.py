@@ -80,10 +80,15 @@ def save(image: LoadedImage | np.ndarray, path: str | Path, icc_profile: bytes |
     ext = path.suffix.lower()
 
     if ext in TIFF_EXTS:
+        # unassociated (straight) alpha, not premultiplied - matches PNG's own convention and
+        # avoids the premultiplied/straight mismatch that's the root cause of most fringing bugs
+        # when an alpha image crosses tools (see the alpha-transparency-fidelity research note)
+        extrasamples = ["unassalpha"] if array.shape[-1] == 4 else None
         tifffile.imwrite(
             path,
             array,
             photometric="rgb",
+            extrasamples=extrasamples,
             extratags=[(ICC_TAG, "B", len(icc_profile), icc_profile, True)],
         )
         return
