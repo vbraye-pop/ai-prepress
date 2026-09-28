@@ -25,6 +25,7 @@
       <button class="pill-tab" data-view="inspect" data-active="true">Inspect</button>
       <button class="pill-tab" data-view="match-look" data-active="false">Match Look</button>
       <button class="pill-tab" data-view="face-regions" data-active="false">Face Regions</button>
+      <button class="pill-tab" data-view="retouch-faces" data-active="false">Retouch Faces</button>
     </nav>
   </header>
 
@@ -55,25 +56,25 @@
     <section id="view-match-look" class="view">
       <div class="workspace">
         <div class="viewport-slot stage-viewport">
-          <div class="match-stage">
-            <div class="match-pair" id="match-import-pair">
-              <div class="match-slot">
+          <div class="compare-stage">
+            <div class="compare-pair" id="match-import-pair">
+              <div class="compare-slot">
                 <span class="t-eyebrow">Target</span>
-                <div id="target-import-mount" class="match-import-mount"></div>
+                <div id="target-import-mount" class="compare-import-mount"></div>
               </div>
-              <div class="match-slot">
+              <div class="compare-slot">
                 <span class="t-eyebrow">Reference</span>
-                <div id="reference-import-mount" class="match-import-mount"></div>
+                <div id="reference-import-mount" class="compare-import-mount"></div>
               </div>
             </div>
-            <div class="match-pair" id="match-result-pair" hidden>
-              <div class="match-slot">
+            <div class="compare-pair" id="match-result-pair" hidden>
+              <div class="compare-slot">
                 <span class="t-eyebrow">Target</span>
-                <img id="match-target-preview" class="match-preview-img" alt="target" />
+                <img id="match-target-preview" class="compare-preview-img" alt="target" />
               </div>
-              <div class="match-slot">
+              <div class="compare-slot">
                 <span class="t-eyebrow">Result</span>
-                <img id="match-result-preview" class="match-preview-img" alt="result" />
+                <img id="match-result-preview" class="compare-preview-img" alt="result" />
               </div>
             </div>
           </div>
@@ -120,11 +121,55 @@
           </div>
           <p id="face-placeholder" class="t-caption">Import a portrait to find retouching regions - under-eye, cheek, forehead, skin.</p>
           <div id="face-status" class="status"></div>
-          <div id="face-opacity-row" class="opacity-row" hidden>
+          <div id="face-opacity-row" class="slider-row" hidden>
             <label for="face-opacity" class="t-caption">Overlay opacity</label>
             <input type="range" id="face-opacity" min="10" max="90" value="55" />
           </div>
           <ul id="face-legend" class="legend-list" hidden></ul>
+        </aside>
+      </div>
+    </section>
+    <section id="view-retouch-faces" class="view">
+      <div class="workspace">
+        <div class="viewport-slot stage-viewport">
+          <div class="compare-stage">
+            <div id="retouch-import-mount"></div>
+            <div class="compare-pair" id="retouch-result-pair" hidden>
+              <div class="compare-slot">
+                <span class="t-eyebrow">Original</span>
+                <img id="retouch-original-preview" class="compare-preview-img" alt="original" />
+              </div>
+              <div class="compare-slot">
+                <span class="t-eyebrow">Retouched</span>
+                <img id="retouch-result-preview" class="compare-preview-img" alt="retouched" />
+              </div>
+            </div>
+          </div>
+          <div class="action-bar">
+            <button type="button" class="btn btn-primary" id="retouch-submit" disabled>Apply retouch</button>
+            <button type="button" class="btn btn-secondary" id="retouch-change-photo" hidden>Change photo</button>
+          </div>
+        </div>
+        <aside class="inspector-panel">
+          <div class="inspector-head">
+            <span class="t-eyebrow">Retouch Faces</span>
+          </div>
+          <div class="slider-row">
+            <label for="retouch-dark-circles" class="t-caption">Dark circles</label>
+            <input type="range" id="retouch-dark-circles" min="0" max="100" value="0" />
+          </div>
+          <div class="slider-row">
+            <label for="retouch-even-skin" class="t-caption">Even skin</label>
+            <input type="range" id="retouch-even-skin" min="0" max="100" value="0" />
+          </div>
+          <div class="slider-row">
+            <label for="retouch-contouring" class="t-caption">Contouring</label>
+            <input type="range" id="retouch-contouring" min="0" max="100" value="0" />
+          </div>
+          <div id="retouch-status" class="status"></div>
+          <p id="retouch-placeholder" class="t-caption">Set at least one slider above 0, then apply.</p>
+          <dl id="retouch-report" class="stat-list" hidden></dl>
+          <a id="retouch-download" class="btn btn-secondary" href="#" hidden>Download full-precision TIFF</a>
         </aside>
       </div>
     </section>

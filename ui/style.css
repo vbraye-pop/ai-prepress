@@ -180,7 +180,8 @@ a.btn {
   min-height: 0;
 }
 
-.face-stage > #face-import-mount {
+.face-stage > #face-import-mount,
+.compare-stage > #retouch-import-mount {
   position: absolute;
   inset: 0;
 }
@@ -212,14 +213,16 @@ a.btn {
   object-fit: contain;
 }
 
-.opacity-row {
+/* generic labeled-range-input row - Face Regions' opacity slider first, Retouch Faces' three
+   strength sliders reuse it too */
+.slider-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin: var(--s-sm) 0 var(--s-md);
 }
 
-.opacity-row input[type="range"] {
+.slider-row input[type="range"] {
   width: 100%;
   accent-color: var(--primary);
 }
@@ -273,18 +276,20 @@ a.btn {
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Match Look ──────────────────────────────────────────────────────── */
-/* Two-up grid (target | reference while picking, target | result once run) filling the same
-   full-bleed space Inspect and Face Regions give their single image - the previous version
-   used a 640px centered form with 220px-tall image pickers, which is the same "cramped narrow
-   column for a tool whose real content is images" mistake Face Regions started with. */
-.match-stage {
+/* ── Shared two-up comparison grid (Match Look, Retouch Faces) ──────────
+   (target | reference while picking, target | result once run) filling the same full-bleed
+   space Inspect and Face Regions give their single image - the previous Match Look version
+   used a 640px centered form with 220px-tall image pickers, the same "cramped narrow column
+   for a tool whose real content is images" mistake Face Regions started with. Generalized to
+   .compare-* (was .match-*) once Retouch Faces needed the identical shape - a third fork of
+   the same CSS would've been the wrong move, same reasoning as .stage-viewport/.action-bar. */
+.compare-stage {
   position: relative;
   flex: 1;
   min-height: 0;
 }
 
-.match-pair {
+.compare-pair {
   position: absolute;
   inset: 0;
   display: grid;
@@ -294,23 +299,23 @@ a.btn {
 
 /* same [hidden]-vs-own-display specificity footgun as .face-canvas-wrap above - any class that
    sets `display` needs this paired override or the hidden attribute is silently ignored. */
-.match-pair[hidden] {
+.compare-pair[hidden] {
   display: none;
 }
 
-.match-slot {
+.compare-slot {
   display: flex;
   flex-direction: column;
   gap: 6px;
   min-height: 0;
 }
 
-.match-import-mount {
+.compare-import-mount {
   flex: 1;
   min-height: 0;
 }
 
-.match-preview-img {
+.compare-preview-img {
   flex: 1;
   min-height: 0;
   width: 100%;

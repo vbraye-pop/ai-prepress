@@ -417,7 +417,96 @@ function setupFaceRegions() {
   });
 }
 
+function setupRetouchFaces() {
+  const submitButton = document.getElementById("retouch-submit");
+  const changePhotoButton = document.getElementById("retouch-change-photo");
+  const mount = document.getElementById("retouch-import-mount");
+  const placeholder = document.getElementById("retouch-placeholder");
+  const status = document.getElementById("retouch-status");
+  const resultPair = document.getElementById("retouch-result-pair");
+  const report = document.getElementById("retouch-report");
+  const downloadLink = document.getElementById("retouch-download");
+  const darkCirclesSlider = document.getElementById("retouch-dark-circles");
+  const evenSkinSlider = document.getElementById("retouch-even-skin");
+  const contouringSlider = document.getElementById("retouch-contouring");
+
+  function refreshSubmitState() {
+    const anyStrength = [darkCirclesSlider, evenSkinSlider, contouringSlider].some((s) => Number(s.value) > 0);
+    submitButton.disabled = !(importer.getFile() && anyStrength);
+  }
+
+  const importer = createImageImport({
+    label: "Drop a portrait here",
+    hint: "or click to browse",
+    onFile: refreshSubmitState,
+  });
+  mount.appendChild(importer.el);
+
+  [darkCirclesSlider, evenSkinSlider, contouringSlider].forEach((slider) =>
+    slider.addEventListener("input", refreshSubmitState)
+  );
+
+  changePhotoButton.addEventListener("click", () => {
+    mount.hidden = false;
+    resultPair.hidden = true;
+    changePhotoButton.hidden = true;
+  });
+
+  submitButton.addEventListener("click", async () => {
+    const file = importer.getFile();
+    if (!file) return;
+
+    status.textContent = "retouching...";
+    placeholder.hidden = true;
+    report.hidden = true;
+    downloadLink.hidden = true;
+
+    const body = new FormData();
+    body.append("image", file);
+    body.append("dark_circles", Number(darkCirclesSlider.value) / 100);
+    body.append("even_skin", Number(evenSkinSlider.value) / 100);
+    body.append("contouring", Number(contouringSlider.value) / 100);
+
+    let response;
+    try {
+      response = await fetch("/api/retouch-faces", { method: "POST", body });
+    } catch (err) {
+      status.textContent = `request failed: ${err}`;
+      return;
+    }
+
+    if (!response.ok) {
+      status.textContent = `server error: ${response.status}`;
+      return;
+    }
+
+    const result = await response.json();
+    if (!result.face_detected) {
+      status.textContent = "no face detected in this image";
+      return;
+    }
+
+    status.textContent = "done";
+    document.getElementById("retouch-original-preview").src = `/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`;
+    document.getElementById("retouch-result-preview").src = `/api/file/${result.result_id}/preview.jpg?t=${Date.now()}`;
+    downloadLink.href = `/api/file/${result.result_id}/download`;
+
+    renderReport(report, [
+      ["Delta-E mean", result.delta_e_mean.toFixed(2)],
+      ["Delta-E max", result.delta_e_max.toFixed(2)],
+      ["Bit depth collapsed", result.bit_depth_collapsed ? "yes" : "no", result.bit_depth_collapsed ? "bad" : "good"],
+      ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
+    ]);
+    report.hidden = false;
+    downloadLink.hidden = false;
+    mount.hidden = true;
+    resultPair.hidden = false;
+    changePhotoButton.hidden = false;
+  });
+}
+
 setupViewTabs();
 setupInspect();
 setupMatchLook();
 setupFaceRegions();
+setupRetouchFaces();

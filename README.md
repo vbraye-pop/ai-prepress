@@ -110,6 +110,23 @@ Region index groups (`FACE_OVAL`, eye/lip loops, eyebrows) are walked from media
 
 **Face Regions tab in the UI**: upload a portrait, hit Find regions. Coordinates come back already scaled to match the preview image, so the browser draws each region as a canvas path directly - no per-pixel compositing needed the way the old label-map viewer required. Checkbox legend toggles regions, hover pops one region and dims the rest.
 
+## Retouch Faces
+
+The masks above feeding into an actual edit: `ai_prepress.features.retouch_faces` does classical frequency separation - split the image into a low-frequency (LF, tone/shading) layer and a high-frequency (HF, texture/pores) layer, edit LF only inside a region mask, recombine with the untouched HF layer. The HF layer never being touched is what makes "waxy skin" impossible by construction, not something hoped for from a generative model. Covers 3 of Capture One's 4 sub-tools this way - Dark Circles (brightens the under-eye band), Even Skin (blends skin tone toward a locally-smoothed version of itself, not a single flat mean - see the module docstring for why that distinction mattered in practice), and Contouring (darkens the cheek region; this one's the crudest of the three, a plain darken slider, not real lighting-aware shading the way Capture One's own copy describes it). Blemish removal isn't here - it needs actual inpainting, a different kind of model this project doesn't have wired up yet.
+
+```python
+from ai_prepress.io import load
+from ai_prepress.features.retouch_faces import retouch_faces, RetouchStrengths
+
+image = load("portrait.tiff")
+result = retouch_faces(image, RetouchStrengths(dark_circles=0.5, even_skin=0.4, contouring=0.3))
+# None if no face detected
+```
+
+No scipy, and PIL's `GaussianBlur` flatly refuses float-mode images (confirmed by hand, not assumed) - routing 16-bit data through it would mean quantizing to 8-bit first, so the LF/HF split runs on a from-scratch separable box-blur approximation operating directly on the same float64 arrays the rest of the pipeline uses. Mask edges are feathered (a hard polygon edge on a brightened region looks like a sticker) using the same blur.
+
+**Retouch Faces tab in the UI**: upload a portrait, set at least one strength slider, Apply retouch. Shows original next to retouched side by side (same before/after pattern as Match Look), plus the same acceptance-check stats (Delta-E, bit depth, ICC profile) Match Look surfaces, and a full-precision TIFF download.
+
 ## Roadmap
 
 - [x] Shared I/O + acceptance checks
@@ -119,7 +136,7 @@ Region index groups (`FACE_OVAL`, eye/lip loops, eyebrows) are walked from media
 - [ ] Shared segmentation backend (SAM3 + BiRefNet), feeds masking, AI crop, and background cutout
 - [ ] AI Crop
 - [x] Face regions (`ai_prepress.face_landmarks`, local MediaPipe) - supersedes the earlier Modal-deployed semantic parser, see above. `deploy/face_parsing.py` and `ai_prepress.face_parsing` are still in the repo (real, tested, still deployed) but no longer wired into the UI.
-- [ ] Retouch Faces (LF/HF pipeline on top of the face-parsing masks; Blemish removal needs Inpaint-Anything too)
+- [x] Retouch Faces - Dark Circles/Even Skin/Contouring via LF/HF split on the face-region masks, see above. Blemish removal still needs Inpaint-Anything, not built yet.
 - [x] Dust removal training-data synthesizer (`training/dust_removal/`)
 - [ ] Dust Removal (RF-DETR fine-tune on the synthetic data, then the fill step)
 - [ ] Background Replacement

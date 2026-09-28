@@ -30,6 +30,7 @@ from ai_prepress.face_landmarks import (
     under_eye_band,
 )
 from ai_prepress.features.match_look import match_look
+from ai_prepress.features.retouch_faces import RetouchStrengths, retouch_faces
 from ai_prepress.metadata import describe
 
 app = FastAPI(title="ai-prepress")
@@ -146,6 +147,43 @@ async def api_face_regions(image: UploadFile = File(...)):
         "under_eye_left": scaled(under_eye_band(landmarks, "left")),
     }
     return JSONResponse({"file_id": file_id, "face_detected": True, "regions": regions})
+
+
+@app.post("/api/retouch-faces")
+async def api_retouch_faces(
+    image: UploadFile = File(...),
+    dark_circles: float = Form(0.0),
+    even_skin: float = Form(0.0),
+    contouring: float = Form(0.0),
+):
+    """Low-frequency masked edits on top of the face-region masks - see
+    ai_prepress.features.retouch_faces for the frequency-separation approach and why the
+    high-frequency texture layer is never touched. Strengths are 0-1; the UI sends 0-100
+    slider values divided by 100."""
+    file_id = _store_upload(image)
+    loaded = core_io.load(_find_file(file_id))
+
+    strengths = RetouchStrengths(dark_circles=dark_circles, even_skin=even_skin, contouring=contouring)
+    result = retouch_faces(loaded, strengths)
+    if result is None:
+        return JSONResponse({"file_id": file_id, "face_detected": False})
+
+    result_id = _store_bytes(b"", ".tiff")
+    core_io.save(result, _find_file(result_id))
+
+    report = acceptance_report(loaded, result)
+
+    return JSONResponse(
+        {
+            "file_id": file_id,
+            "result_id": result_id,
+            "face_detected": True,
+            "delta_e_mean": report.delta_e_mean,
+            "delta_e_max": report.delta_e_max,
+            "bit_depth_collapsed": report.bit_depth_collapsed,
+            "icc_profile_present": report.icc_profile_present,
+        }
+    )
 
 
 @app.get("/api/file/{file_id}/preview.jpg")
