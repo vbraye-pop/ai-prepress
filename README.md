@@ -32,6 +32,20 @@ One function covers two workflows: point it at a flat, neutral reference before 
 > [!NOTE]
 > The color-transfer math itself works in one of two named spaces (sRGB or Adobe RGB (1998)), decided by the same heuristic guess Inspect shows - a substring match on the profile description, not a real ICC parser. Covers the two spaces actually in use here, nothing more general yet.
 
+## Training data (dust removal)
+
+Dust removal needs a fine-tuned detector before anything else, and that needs a dataset before the fine-tuning does - so this came first, on its own, ahead of the feature itself.
+
+`training/dust_removal/synthesize.py` takes a directory of clean (dust-free) images and adds synthetic sensor-dust spots, writing the augmented images plus a COCO-style `annotations.json` next to them:
+
+```bash
+uv run python -m training.dust_removal.synthesize path/to/clean_images/ path/to/output/
+```
+
+Dust is modeled as multiplicative attenuation in linear light (soft-edged, semi-transparent, roughly circular) rather than painted onto the gamma-encoded pixels directly - matches how DxO describes building their own detector's training data, and it's the only way the falloff shape comes out right. Goes through the same `cctf_decoding`/`cctf_encoding` pair Match Look uses, not a hardcoded sRGB gamma.
+
+No RF-DETR fine-tuning yet, and no real "clean" source photos lined up to run this against at scale - both still open.
+
 ## Installation
 
 ```bash
@@ -85,7 +99,8 @@ info.colourspace_guess  # the sRGB / Adobe RGB (1998) bucket Match Look's math u
 - [ ] Shared segmentation backend (SAM3 + BiRefNet), feeds masking, AI crop, and background cutout
 - [ ] AI Crop
 - [ ] Retouch Faces
-- [ ] Dust Removal (needs a synthetic training set built first)
+- [x] Dust removal training-data synthesizer (`training/dust_removal/`)
+- [ ] Dust Removal (RF-DETR fine-tune on the synthetic data, then the fill step)
 - [ ] Background Replacement
 - [ ] Snap to Eye - blocked on a scope call, Capture One's actual feature is a coarse focus-check aid, not a precision alignment tool, and it's not clear yet which one is wanted here
 
