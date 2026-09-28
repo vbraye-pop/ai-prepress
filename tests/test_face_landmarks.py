@@ -3,14 +3,20 @@ import numpy as np
 from ai_prepress.face_landmarks import (
     FACE_OVAL,
     LEFT_EYE_LOOP,
+    LEFT_IRIS,
+    LIPS_INNER,
     LIPS_OUTER,
     RIGHT_EYE_LOOP,
+    RIGHT_IRIS,
     FaceLandmarks,
     _convex_hull,
     _sort_left_to_right,
     _walk_loop,
     cheek_region,
+    eye_sclera_region,
     forehead_region,
+    lip_region,
+    mouth_interior_region,
     skin_region,
     under_eye_band,
 )
@@ -27,6 +33,9 @@ def test_real_landmark_loops_have_the_expected_shape():
     assert len(RIGHT_EYE_LOOP) == 16
     assert len(LEFT_EYE_LOOP) == 16
     assert len(LIPS_OUTER) == 20
+    assert len(LIPS_INNER) == 20
+    assert len(RIGHT_IRIS) == 4
+    assert len(LEFT_IRIS) == 4
     assert len(set(FACE_OVAL)) == len(FACE_OVAL)  # no repeated nodes
 
 
@@ -67,6 +76,29 @@ def test_skin_region_excludes_eyes_and_lips():
     oval, cutouts = skin_region(landmarks)
     assert len(oval) == len(FACE_OVAL)
     assert len(cutouts) == 3  # right eye, left eye, lips
+
+
+def test_eye_sclera_region_excludes_the_iris():
+    landmarks = _fake_landmarks()
+    for side in ("right", "left"):
+        sclera, cutouts = eye_sclera_region(landmarks, side)
+        assert sclera.shape == (16, 2)
+        assert len(cutouts) == 1
+        assert cutouts[0].shape == (4, 2)
+
+
+def test_mouth_interior_region_returns_the_inner_lip_loop():
+    landmarks = _fake_landmarks()
+    mouth = mouth_interior_region(landmarks)
+    assert mouth.shape == (len(LIPS_INNER), 2)
+
+
+def test_lip_region_excludes_the_mouth_interior():
+    landmarks = _fake_landmarks()
+    outer, cutouts = lip_region(landmarks)
+    assert outer.shape == (len(LIPS_OUTER), 2)
+    assert len(cutouts) == 1
+    assert cutouts[0].shape == (len(LIPS_INNER), 2)
 
 
 def test_cheek_and_forehead_regions_are_simple_polygons():

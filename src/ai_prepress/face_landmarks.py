@@ -113,6 +113,13 @@ _LIPS_OUTER_EDGES = [
     (321, 375), (375, 291), (61, 185), (185, 40), (40, 39), (39, 37), (37, 0), (0, 267),
     (267, 269), (269, 270), (270, 409), (409, 291),
 ]
+_LIPS_INNER_EDGES = [
+    (78, 95), (95, 88), (88, 178), (178, 87), (87, 14), (14, 317), (317, 402), (402, 318),
+    (318, 324), (324, 308), (78, 191), (191, 80), (80, 81), (81, 82), (82, 13), (13, 312),
+    (312, 311), (311, 310), (310, 415), (415, 308),
+]
+_RIGHT_IRIS_EDGES = [(469, 470), (470, 471), (471, 472), (472, 469)]
+_LEFT_IRIS_EDGES = [(474, 475), (475, 476), (476, 477), (477, 474)]
 _RIGHT_EYEBROW_NODES = [46, 53, 52, 65, 55, 70, 63, 105, 66, 107]
 _LEFT_EYEBROW_NODES = [276, 283, 282, 295, 285, 300, 293, 334, 296, 336]
 
@@ -184,6 +191,9 @@ FACE_OVAL = _walk_loop(_FACE_OVAL_EDGES)
 RIGHT_EYE_LOOP = _walk_loop(_RIGHT_EYE_LOOP_EDGES)
 LEFT_EYE_LOOP = _walk_loop(_LEFT_EYE_LOOP_EDGES)
 LIPS_OUTER = _walk_loop(_LIPS_OUTER_EDGES)
+LIPS_INNER = _walk_loop(_LIPS_INNER_EDGES)
+RIGHT_IRIS = _walk_loop(_RIGHT_IRIS_EDGES)
+LEFT_IRIS = _walk_loop(_LEFT_IRIS_EDGES)
 RIGHT_EYE_LOWER = _walk_loop(_RIGHT_EYE_LOWER_EDGES)
 LEFT_EYE_LOWER = _walk_loop(_LEFT_EYE_LOWER_EDGES)
 
@@ -254,3 +264,30 @@ def skin_region(landmarks: FaceLandmarks) -> tuple[np.ndarray, list[np.ndarray]]
         landmarks.subset(LIPS_OUTER),
     ]
     return oval, cutouts
+
+
+def eye_sclera_region(landmarks: FaceLandmarks, side: str) -> tuple[np.ndarray, list[np.ndarray]]:
+    """The eye's own loop (eyelid margin) minus the iris - the white of the eye, what an eye
+    whitening/brightening adjustment should be confined to, not the iris/pupil itself. The iris
+    loop is only 4 points (a coarse diamond, not a true circle - mediapipe's own iris landmark
+    set is sparse) so it under-covers the true iris slightly; that's a deliberate margin in the
+    right direction here, since erring toward leaving a sliver of iris untouched is far less
+    noticeable than an eye-whitening effect visibly bleeding onto the iris/pupil."""
+    eye_idx, iris_idx = (RIGHT_EYE_LOOP, RIGHT_IRIS) if side == "right" else (LEFT_EYE_LOOP, LEFT_IRIS)
+    return landmarks.subset(eye_idx), [landmarks.subset(iris_idx)]
+
+
+def mouth_interior_region(landmarks: FaceLandmarks) -> np.ndarray:
+    """The inner lip loop - what's visible as teeth (or the dark gap between them) when the
+    mouth is open. On a closed mouth this polygon collapses to a thin sliver along the lip
+    line, which is the geometrically correct answer (there's no visible tooth surface to select)
+    rather than something that needs special-casing here - a teeth-whitening effect applied to a
+    near-zero-area mask is just a near-zero-visible-effect, not a bug."""
+    return landmarks.subset(LIPS_INNER)
+
+
+def lip_region(landmarks: FaceLandmarks) -> tuple[np.ndarray, list[np.ndarray]]:
+    """The outer lip polygon minus the inner mouth (see mouth_interior_region) - what a lip
+    color/tint adjustment should be confined to, so it doesn't tint visible teeth or the mouth's
+    dark interior when the subject is smiling."""
+    return landmarks.subset(LIPS_OUTER), [landmarks.subset(LIPS_INNER)]

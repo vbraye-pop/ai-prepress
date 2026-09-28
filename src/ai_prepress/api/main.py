@@ -107,6 +107,9 @@ class RetouchStrengthsPayload(BaseModel):
     contouring: float = 0.0
     feather_amount: float = 1.0
     edge_amount: float = 0.0
+    eye_whiten: float = 0.0
+    teeth_whiten: float = 0.0
+    lip_enhance: float = 0.0
 
     def to_strengths(self) -> RetouchStrengths:
         return RetouchStrengths(**self.model_dump())

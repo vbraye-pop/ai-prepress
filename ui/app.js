@@ -418,10 +418,14 @@ function setupFaceRegions() {
 }
 
 // one strength value per slider key, all sliders default to their existing behavior's neutral
-// point (0 for the four effect strengths, 1x/0 for feather/edge - matching RetouchStrengths'
+// point (0 for every effect strength, 1x/0 for feather/edge - matching RetouchStrengths'
 // own Python-side dataclass defaults exactly, see retouch_faces.py)
 function defaultRetouchStrengths() {
-  return { dark_circles: 0, even_skin: 0, even_skin_texture: 0, contouring: 0, feather_amount: 1, edge_amount: 0 };
+  return {
+    dark_circles: 0, even_skin: 0, even_skin_texture: 0, contouring: 0,
+    feather_amount: 1, edge_amount: 0,
+    eye_whiten: 0, teeth_whiten: 0, lip_enhance: 0,
+  };
 }
 
 function setupRetouchFaces() {
@@ -444,10 +448,17 @@ function setupRetouchFaces() {
     even_skin: document.getElementById("retouch-even-skin"),
     even_skin_texture: document.getElementById("retouch-even-skin-texture"),
     contouring: document.getElementById("retouch-contouring"),
+    eye_whiten: document.getElementById("retouch-eye-whiten"),
+    teeth_whiten: document.getElementById("retouch-teeth-whiten"),
+    lip_enhance: document.getElementById("retouch-lip-enhance"),
     feather_amount: document.getElementById("retouch-feather"),
     edge_amount: document.getElementById("retouch-edge"),
   };
-  const SLIDER_SCALE = { dark_circles: 100, even_skin: 100, even_skin_texture: 100, contouring: 100, feather_amount: 100, edge_amount: 100 };
+  const SLIDER_SCALE = {
+    dark_circles: 100, even_skin: 100, even_skin_texture: 100, contouring: 100,
+    eye_whiten: 100, teeth_whiten: 100, lip_enhance: 100,
+    feather_amount: 100, edge_amount: 100,
+  };
 
   let fileId = null;
   let faceCount = 0;

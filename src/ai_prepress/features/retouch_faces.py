@@ -31,6 +31,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import colour
 import numpy as np
 from PIL import Image, ImageCms, ImageDraw
 
@@ -38,6 +39,9 @@ from ai_prepress.face_landmarks import (
     FaceLandmarks,
     cheek_region,
     detect_landmarks,
+    eye_sclera_region,
+    lip_region,
+    mouth_interior_region,
     skin_region,
     under_eye_band,
 )
@@ -183,6 +187,11 @@ class RetouchStrengths:
     edge_amount: float = 0.0  # -1..1, negative erodes / positive dilates every active region's
     # mask boundary (one shared value, same pattern feather already uses rather than a field per
     # effect) - the cheap fix for "the AI-derived region is a bit off" without needing a brush.
+    eye_whiten: float = 0.0  # 0-1, sclera only (iris excluded by mask geometry, not color math)
+    teeth_whiten: float = 0.0  # 0-1, tooth-colored pixels only within the mouth-interior mask
+    lip_enhance: float = 0.0  # 0-1, boosts the person's OWN lip color - not a recolor/lipstick
+    # mode, which every source confirms is a different, beauty-app-oriented default this
+    # commercial/prepress-positioned tool deliberately doesn't default to (see _apply_lip_enhance)
 
 
 def _feather_radius(landmarks: FaceLandmarks) -> float:
@@ -244,6 +253,108 @@ def _apply_contouring(lf: np.ndarray, mask: np.ndarray, strength: float) -> np.n
     return lf - mask[..., None] * shadow
 
 
+# ---------------------------------------------------------------------------------------------
+# Eyes, teeth, lips: direct HSL color grades within a mask, not frequency-separation. These
+# aren't texture-preserving smoothing operations the way the skin tools above are - they're
+# small, targeted color corrections, so they run on the final recombined RGB image (see
+# retouch_faces' second per-face pass) rather than being entangled with the LF/HF machinery.
+# Grounded in a research pass across professional retouching tutorials (PhotoshopCafe, Fstoppers,
+# Retouching Academy, Lightroom/Kelby, Photoshop Essentials, PortraitPro/ON1/Aperty documentation)
+# rather than guessed - see each function's docstring for what's sourced vs an approximation.
+# ---------------------------------------------------------------------------------------------
+
+
+def _rgb_to_hsl(rgb: np.ndarray) -> np.ndarray:
+    return colour.RGB_to_HSL(np.clip(rgb, 0.0, 1.0))
+
+
+def _hsl_to_rgb(hsl: np.ndarray) -> np.ndarray:
+    return np.clip(colour.HSL_to_RGB(hsl), 0.0, 1.0)
+
+
+def _apply_eye_whiten(rgb: np.ndarray, mask: np.ndarray, strength: float) -> np.ndarray:
+    """Desaturates the yellow/red cast and applies a small, highlight-rolloff-capped lightness
+    lift - not a flat brighten. Professional practice treats sclera discoloration as a color-cast
+    correction first, brightness second, and keeps the lightness move small: over-brightening or
+    over-desaturating into a flat, glowing white ("milk eyes"/"alien eyes") is the single
+    most-documented failure mode across every source consulted, not a blown-out catchlight - and
+    the catchlight is protected structurally regardless, since it sits on the iris and this mask
+    excludes the iris by construction (see face_landmarks.eye_sclera_region). Saturation is
+    reduced by up to 20%, never to zero, so blood vessel texture stays visible - full
+    desaturation reads as fake in every source that discussed it."""
+    hsl = _rgb_to_hsl(rgb)
+    lightness = hsl[..., 2]
+    hsl[..., 1] = hsl[..., 1] * (1.0 - 0.2 * strength)
+    rolloff = np.clip(1.0 - lightness, 0.0, 1.0)  # tapers to 0 as pixels are already bright
+    hsl[..., 2] = np.clip(lightness + 0.12 * strength * rolloff, 0.0, 1.0)
+    whitened = _hsl_to_rgb(hsl)
+    return rgb + mask[..., None] * (whitened - rgb)
+
+
+def _tooth_submask(rgb: np.ndarray, geometric_mask: np.ndarray) -> np.ndarray:
+    """Restricts the mouth-interior polygon to actual tooth-colored pixels - gums, the dark gap
+    between teeth, and the tongue all sit inside the same geometric polygon, but every source on
+    teeth retouching treats keeping them out as a masking problem, not a color-math one (manual
+    tutorials brush-mask tooth surfaces by hand; Lightroom's AI "Teeth" mask is a real semantic
+    segmentation, not the raw mouth-opening shape). Teeth read reliably brighter than gums/gaps/
+    tongue within the same mouth, so a threshold relative to THIS region's own lightness
+    distribution - not a fixed value, which wouldn't hold across different lighting or skin
+    tones - isolates them."""
+    lightness = _rgb_to_hsl(rgb)[..., 2]
+    within = geometric_mask > 0.5
+    if not within.any():
+        return geometric_mask
+    threshold = np.percentile(lightness[within], 55)
+    tooth_like = (lightness > threshold).astype(np.float64)
+    return geometric_mask * tooth_like
+
+
+def _apply_teeth_whiten(rgb: np.ndarray, mask: np.ndarray, strength: float) -> np.ndarray:
+    """-60 to -80% saturation reduction within the tooth mask (Kelby's Lightroom workflow: -62%;
+    Photoshop Essentials' manual technique: -70/-80%), never to zero - fully desaturated teeth
+    read gray and dead in every source that showed the failure mode - plus a modest lightness
+    lift (+10-20% lightness, or +0.79 exposure stops in Kelby's numbers; both land in the same
+    ballpark once converted). `mask` is expected to already be _tooth_submask-filtered, not the
+    raw mouth-interior polygon - color math alone can't tell a gum from a tooth."""
+    hsl = _rgb_to_hsl(rgb)
+    hsl[..., 1] = hsl[..., 1] * (1.0 - 0.7 * strength)
+    hsl[..., 2] = np.clip(hsl[..., 2] + 0.1 * strength, 0.0, 1.0)
+    whitened = _hsl_to_rgb(hsl)
+    return rgb + mask[..., None] * (whitened - rgb)
+
+
+def _apply_lip_enhance(rgb: np.ndarray, mask: np.ndarray, strength: float) -> np.ndarray:
+    """Enhances the person's own lip color rather than recoloring it - the confirmed default for
+    commercial/portrait-oriented tools (ON1, Aperty, the manual Capture One/Lightroom workflow),
+    as opposed to beauty/glamour apps (PortraitPro's Lipstick feature), which default to a color
+    swatch instead. A swatch/recolor mode would be a genuinely different, separate code path
+    (compositing toward a chosen target hue), not a variant of this function.
+
+    Lightness is left untouched entirely - texture, the vermilion border, and the specular
+    highlight live almost entirely in L, so leaving it alone preserves them without needing a
+    frequency-separation pass the way skin smoothing does. Only chroma (saturation) is scaled up,
+    by up to 25% at full strength, gated back toward no boost as pixels approach the lip's own
+    highlight range: two independent sources (PortraitPro shipping Shine as a slider separate
+    from its lipstick color, and a manual retouching tutorial that dodges highlights back in
+    *after* its color step) show professional practice treats the specular as a second concern
+    the color step must not touch, not something the color math handles on its own. The boost is
+    multiplicative (`s * factor`), which already keeps near-zero-chroma highlight pixels near
+    zero without a separate floor - amplifying almost nothing by any factor is still almost
+    nothing."""
+    hsl = _rgb_to_hsl(rgb)
+    hue, saturation, lightness = hsl[..., 0], hsl[..., 1], hsl[..., 2]
+
+    within = mask > 0.5
+    highlight_threshold = np.percentile(lightness[within], 80) if within.any() else 1.0
+    rolloff_width = 0.15
+    gate = np.clip((highlight_threshold - lightness) / rolloff_width, 0.0, 1.0)
+
+    boost = 1.0 + 0.25 * strength * gate
+    new_hsl = np.stack([hue, np.clip(saturation * boost, 0.0, 1.0), lightness], axis=-1)
+    enhanced = _hsl_to_rgb(new_hsl)
+    return rgb + mask[..., None] * (enhanced - rgb)
+
+
 def _apply_face(
     lf: np.ndarray,
     hf_multiplier: np.ndarray,
@@ -278,6 +389,36 @@ def _apply_face(
             lf = _apply_contouring(lf, mask, strengths.contouring)
 
     return lf, hf_multiplier
+
+
+def _apply_face_color(
+    rgb: np.ndarray, landmarks: FaceLandmarks, strengths: RetouchStrengths, shape: tuple[int, int]
+) -> np.ndarray:
+    """Eyes/teeth/lips against the final recombined image - see the module note above these
+    functions for why they run as a separate pass from the LF/HF skin tools rather than editing
+    `lf`. Feather is scaled down relative to the skin tools' - the sclera, tooth, and lip regions
+    are all much smaller than a cheek or the whole face oval, so the same absolute feather radius
+    would blur away a meaningful fraction of a small region rather than just softening its edge."""
+    feather = _feather_radius(landmarks) * strengths.feather_amount * 0.4
+    edge = _edge_offset_px(landmarks, strengths.edge_amount)
+
+    if strengths.eye_whiten > 0:
+        for side in ("right", "left"):
+            sclera, cutouts = eye_sclera_region(landmarks, side)
+            mask = rasterize_mask(sclera, shape, cutouts=cutouts, feather=feather, edge=edge)
+            rgb = _apply_eye_whiten(rgb, mask, strengths.eye_whiten)
+
+    if strengths.teeth_whiten > 0:
+        geometric_mask = rasterize_mask(mouth_interior_region(landmarks), shape, feather=feather, edge=edge)
+        tooth_mask = _tooth_submask(rgb, geometric_mask)
+        rgb = _apply_teeth_whiten(rgb, tooth_mask, strengths.teeth_whiten)
+
+    if strengths.lip_enhance > 0:
+        outer, cutouts = lip_region(landmarks)
+        mask = rasterize_mask(outer, shape, cutouts=cutouts, feather=feather, edge=edge)
+        rgb = _apply_lip_enhance(rgb, mask, strengths.lip_enhance)
+
+    return rgb
 
 
 def retouch_faces(
@@ -337,6 +478,15 @@ def retouch_faces(
         lf, hf_multiplier = _apply_face(lf, hf_multiplier, face_landmarks, face_strengths, (height, width))
 
     result_unit = np.clip(lf + hf * hf_multiplier[..., None], 0.0, 1.0)
+
+    # eyes/teeth/lips run as a second pass, against the recombined image - see _apply_face_color
+    for face_index, face_landmarks in enumerate(landmarks):
+        face_strengths = per_face.get(face_index)
+        if face_strengths is None:
+            continue
+        result_unit = _apply_face_color(result_unit, face_landmarks, face_strengths, (height, width))
+    result_unit = np.clip(result_unit, 0.0, 1.0)
+
     icc_profile = image.icc_profile
     if icc_profile is None:
         # io.save() requires one - same fallback match_look.py uses for the same reason
