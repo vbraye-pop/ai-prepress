@@ -55,8 +55,12 @@ app = modal.App("ai-prepress-layer-separation")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
+    .apt_install("git")  # needed for pip's `git+https://...` install of diffusers below
     .pip_install(
         "torch",
+        "torchvision",  # the pipeline's own Qwen2VLVideoProcessor requires it, discovered from a
+        # real build failure (ImportError: Qwen2VLVideoProcessor requires the Torchvision
+        # library), not in the model's own documented install instructions
         "git+https://github.com/huggingface/diffusers",  # QwenImageLayeredPipeline is too new
         # for a stable diffusers release as of this writing - the model's own README installs
         # from git directly, followed here rather than pinning a release that may not have it
@@ -87,6 +91,7 @@ class LayerDecomposer:
         self.pipeline = self.pipeline.to("cuda", torch.bfloat16)
         self.pipeline.set_progress_bar_config(disable=True)
 
+    @modal.method()
     def decompose(self, image_bytes: bytes, layers: int = DEFAULT_LAYER_COUNT) -> bytes:
         """Not a web endpoint - called via .spawn() from the submit handler below, so it isn't
         subject to Modal web functions' 150-second HTTP request ceiling (this class's own
@@ -142,23 +147,41 @@ class LayerDecomposer:
 
 
 @app.function(image=image)
-@modal.fastapi_endpoint(method="POST")
-async def submit(file: UploadFile = File(...)) -> Response:
-    contents = await file.read()
-    call = LayerDecomposer().decompose.spawn(contents)
-    return JSONResponse({"call_id": call.object_id})
+@modal.asgi_app()
+def web():
+    """A single ASGI app hosting both routes under one URL, rather than two separate
+    @modal.fastapi_endpoint functions - discovered the hard way against a real deployment that
+    each fastapi_endpoint-decorated function gets its OWN subdomain (...-submit.modal.run,
+    ...-result.modal.run), not a shared base path with route dispatch. The client
+    (ai_prepress.layer_decompose) is written around one base URL with /submit and /result
+    sub-paths, so this is the fix that matches it rather than a client-side rewrite."""
+    from fastapi import FastAPI
 
+    web_app = FastAPI()
 
-@app.function(image=image)
-@modal.fastapi_endpoint(method="GET")
-async def result(call_id: str) -> Response:
-    function_call = modal.FunctionCall.from_id(call_id)
-    try:
-        zip_bytes = function_call.get(timeout=0)
-    except TimeoutError:
-        return JSONResponse({"status": "pending"})
-    except modal.exception.OutputExpiredError:
-        # results expire after 7 days - the client's own poll loop times out at 10 minutes, so
-        # reaching this means a call_id from a much older session was polled, not a race
-        return JSONResponse({"status": "expired"})
-    return Response(content=zip_bytes, media_type="application/zip")
+    @web_app.post("/submit")
+    async def submit(file: UploadFile = File(...)) -> Response:
+        contents = await file.read()
+        # a plain in-module `LayerDecomposer().decompose.spawn(...)` fails here with
+        # `AttributeError: 'function' object has no attribute 'spawn'` - discovered against a
+        # real deployment, not documented anywhere obvious. Calling a sibling class's method from
+        # inside another already-running container of the same app needs an explicit lookup by
+        # name (the same mechanism cross-app calls use), not direct instantiation.
+        decomposer_cls = modal.Cls.from_name("ai-prepress-layer-separation", "LayerDecomposer")
+        call = decomposer_cls().decompose.spawn(contents)
+        return JSONResponse({"call_id": call.object_id})
+
+    @web_app.get("/result")
+    async def result(call_id: str) -> Response:
+        function_call = modal.FunctionCall.from_id(call_id)
+        try:
+            zip_bytes = function_call.get(timeout=0)
+        except TimeoutError:
+            return JSONResponse({"status": "pending"})
+        except modal.exception.OutputExpiredError:
+            # results expire after 7 days - the client's own poll loop times out at 10 minutes,
+            # so reaching this means a call_id from a much older session was polled, not a race
+            return JSONResponse({"status": "expired"})
+        return Response(content=zip_bytes, media_type="application/zip")
+
+    return web_app
