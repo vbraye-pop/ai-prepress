@@ -24,7 +24,10 @@ Deploy: uv run --group deploy modal deploy deploy/layer_naming.py
 
 Fast enough (2.3B params, ~4.6GB weights in bf16, a batch of small single-object crops) to be a
 plain synchronous web endpoint, same reasoning as deploy/object_count.py - no submit/result split
-needed, unlike deploy/layer_separation.py's multi-minute diffusion call.
+needed, unlike deploy/layer_separation.py's multi-minute diffusion call. Measured, not estimated:
+~48s for a real 3-crop batch on a T4, comfortably under Modal's 150s web-endpoint ceiling but
+meaningfully slower than "a few seconds" - worth remembering when this runs after a multi-minute
+decompose call, since it adds real, non-trivial wall-clock on top of it.
 
 torch/transformers/PIL are only ever imported inside the function body below, never at module
 level - same reasoning as every other deploy script in this project.
@@ -39,7 +42,15 @@ from fastapi.responses import JSONResponse
 MODEL_ID = "OpenGVLab/InternVL3_5-2B"
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-PROMPT = "<image>\nName the object in this image in 1 to 3 words. Respond with only the name, no punctuation or explanation."
+PROMPT = (
+    "<image>\nWhat kind of object is this? Answer with a short category name (1 to 3 words, "
+    "like 'coffee mug' or 'denim jacket'), not any text or logo visible on it. Respond with "
+    "only the name, no punctuation or explanation."
+)
+# a real deployed test surfaced the exact failure the "not any text or logo" clause fixes: the
+# original prompt (just "name the object") made the model transcribe a sticker's own printed
+# text verbatim ("Rly Thot Shot") instead of describing what kind of object it was ("sticker") -
+# discovered from real output, not anticipated in advance
 
 app = modal.App("ai-prepress-layer-naming")
 
@@ -48,7 +59,13 @@ image = (
     .pip_install(
         "torch",
         "torchvision",
-        "transformers",
+        # unpinned "transformers" pulled a version whose internal weight-tying refactor
+        # (AttributeError: 'InternVLChatModel' object has no attribute 'all_tied_weights_keys')
+        # broke InternVL's own trust_remote_code modeling code - a real build failure, not a
+        # guess. InternVL3.5 (up to 8B) documents transformers>=4.52.1 as its own minimum;
+        # pinned to a specific known-working release rather than an open-ended lower bound so a
+        # future transformers release can't silently break this build again.
+        "transformers==4.55.0",
         "accelerate",
         "einops",  # InternVL's own trust_remote_code modeling files import this directly
         "timm",  # same - part of its own remote code, not an incidental extra
