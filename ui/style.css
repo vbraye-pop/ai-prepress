@@ -116,29 +116,6 @@ main {
   text-align: right;
 }
 
-/* ── Match Look ──────────────────────────────────────────────────────── */
-.container-narrow {
-  max-width: 640px;
-  width: 100%;
-  margin: 0 auto;
-}
-
-.field-row {
-  display: flex;
-  gap: var(--s-md);
-  flex-wrap: wrap;
-  margin-bottom: var(--s-md);
-}
-
-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font: 500 12px/1.4 var(--font-sans);
-  color: var(--slate);
-  margin-bottom: var(--s-md);
-}
-
 .status {
   min-height: 1.2rem;
   color: var(--slate);
@@ -146,34 +123,12 @@ form label {
   margin: var(--s-sm) 0;
 }
 
-.importer-slot {
+.field-label {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;
-  min-width: 200px;
-}
-
-.importer-box {
-  height: 220px;
-}
-
-.result-figure {
-  margin: 0 0 var(--s-lg);
-  text-align: center;
-}
-
-.result-figure img {
-  max-width: 100%;
-  max-height: 320px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-md);
-  display: inline-block;
-  background: var(--surface-sunken);
-}
-
-.result-figure figcaption {
-  margin-top: 4px;
+  font: 500 12px/1.4 var(--font-sans);
+  color: var(--slate);
 }
 
 a.btn {
@@ -193,19 +148,32 @@ a.btn {
   display: none;
 }
 
-/* ── Face Parsing ────────────────────────────────────────────────────── */
+/* ── Shared tool-viewport pattern (Face Regions, Match Look) ────────────
+   A viewport-slot that also needs a bottom action bar (Run/Parse + a "change photo(s)"
+   button), on top of the plain single-image full-bleed treatment .viewport-slot alone gives
+   Inspect. Generalized here once both tabs needed the exact same shape rather than forked per
+   tab - .face-stage/.match-stage stay separate since Face Regions overlays one photo+canvas
+   while Match Look shows a 2-up grid, genuinely different content shapes underneath. */
+.stage-viewport {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-md);
+}
+
+.action-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-md);
+}
+
+/* ── Face Regions ────────────────────────────────────────────────────── */
 /* Same full-bleed treatment as Inspect's viewport-slot (image/canvas fills all available
    space), not a small centered thumbnail - the first two passes at this both left most of
    the panel as dead space with a tiny image floating in it. face-stage stacks the importer
    and the result canvas on top of each other (only one visible at a time) so swapping from
    "importing" to "parsed" doesn't reflow the layout or leave the original photo duplicated
    next to its own overlay. */
-.face-viewport {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-md);
-}
-
 .face-stage {
   position: relative;
   flex: 1;
@@ -215,13 +183,6 @@ a.btn {
 .face-stage > #face-import-mount {
   position: absolute;
   inset: 0;
-}
-
-.face-action-bar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--s-md);
 }
 
 .face-canvas-wrap {
@@ -310,4 +271,52 @@ a.btn {
   font-size: 12px;
   color: var(--slate);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Match Look ──────────────────────────────────────────────────────── */
+/* Two-up grid (target | reference while picking, target | result once run) filling the same
+   full-bleed space Inspect and Face Regions give their single image - the previous version
+   used a 640px centered form with 220px-tall image pickers, which is the same "cramped narrow
+   column for a tool whose real content is images" mistake Face Regions started with. */
+.match-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.match-pair {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-md);
+}
+
+/* same [hidden]-vs-own-display specificity footgun as .face-canvas-wrap above - any class that
+   sets `display` needs this paired override or the hidden attribute is silently ignored. */
+.match-pair[hidden] {
+  display: none;
+}
+
+.match-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.match-import-mount {
+  flex: 1;
+  min-height: 0;
+}
+
+.match-preview-img {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  background: var(--surface-sunken);
 }

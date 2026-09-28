@@ -111,10 +111,14 @@ function setupInspect() {
 }
 
 function setupMatchLook() {
-  const form = document.getElementById("match-form");
   const submitButton = document.getElementById("match-submit");
+  const changePhotosButton = document.getElementById("match-change-photos");
   const status = document.getElementById("match-status");
-  const output = document.getElementById("match-output");
+  const placeholder = document.getElementById("match-placeholder");
+  const report = document.getElementById("match-report");
+  const downloadLink = document.getElementById("match-download");
+  const importPair = document.getElementById("match-import-pair");
+  const resultPair = document.getElementById("match-result-pair");
 
   function refreshSubmitState() {
     submitButton.disabled = !(targetImporter.getFile() && referenceImporter.getFile());
@@ -134,10 +138,17 @@ function setupMatchLook() {
   });
   document.getElementById("reference-import-mount").appendChild(referenceImporter.el);
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  changePhotosButton.addEventListener("click", () => {
+    importPair.hidden = false;
+    resultPair.hidden = true;
+    changePhotosButton.hidden = true;
+  });
+
+  submitButton.addEventListener("click", async () => {
     status.textContent = "running...";
-    output.hidden = true;
+    placeholder.hidden = true;
+    report.hidden = true;
+    downloadLink.hidden = true;
 
     const body = new FormData();
     body.append("target", targetImporter.getFile());
@@ -160,16 +171,21 @@ function setupMatchLook() {
     const result = await response.json();
     status.textContent = "done";
 
-    document.getElementById("result-preview").src = `/api/file/${result.result_id}/preview.jpg?t=${Date.now()}`;
-    document.getElementById("match-download").href = `/api/file/${result.result_id}/download`;
+    document.getElementById("match-target-preview").src = `/api/file/${result.target_id}/preview.jpg?t=${Date.now()}`;
+    document.getElementById("match-result-preview").src = `/api/file/${result.result_id}/preview.jpg?t=${Date.now()}`;
+    downloadLink.href = `/api/file/${result.result_id}/download`;
 
-    renderReport(document.getElementById("match-report"), [
+    renderReport(report, [
       ["Delta-E mean", result.delta_e_mean.toFixed(2)],
       ["Delta-E max", result.delta_e_max.toFixed(2)],
       ["Bit depth collapsed", result.bit_depth_collapsed ? "yes" : "no", result.bit_depth_collapsed ? "bad" : "good"],
       ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
     ]);
-    output.hidden = false;
+    report.hidden = false;
+    downloadLink.hidden = false;
+    importPair.hidden = true;
+    resultPair.hidden = false;
+    changePhotosButton.hidden = false;
   });
 }
 

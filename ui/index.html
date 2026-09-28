@@ -53,50 +53,63 @@
     </section>
 
     <section id="view-match-look" class="view">
-      <div class="container-narrow">
-        <form id="match-form" class="card">
-          <div class="field-row">
-            <div class="importer-slot">
-              <span class="t-eyebrow">Target</span>
-              <div id="target-import-mount" class="importer-box"></div>
+      <div class="workspace">
+        <div class="viewport-slot stage-viewport">
+          <div class="match-stage">
+            <div class="match-pair" id="match-import-pair">
+              <div class="match-slot">
+                <span class="t-eyebrow">Target</span>
+                <div id="target-import-mount" class="match-import-mount"></div>
+              </div>
+              <div class="match-slot">
+                <span class="t-eyebrow">Reference</span>
+                <div id="reference-import-mount" class="match-import-mount"></div>
+              </div>
             </div>
-            <div class="importer-slot">
-              <span class="t-eyebrow">Reference</span>
-              <div id="reference-import-mount" class="importer-box"></div>
+            <div class="match-pair" id="match-result-pair" hidden>
+              <div class="match-slot">
+                <span class="t-eyebrow">Target</span>
+                <img id="match-target-preview" class="match-preview-img" alt="target" />
+              </div>
+              <div class="match-slot">
+                <span class="t-eyebrow">Result</span>
+                <img id="match-result-preview" class="match-preview-img" alt="result" />
+              </div>
             </div>
           </div>
-          <label>Method
+          <div class="action-bar">
+            <button type="button" class="btn btn-primary" id="match-submit" disabled>Run match look</button>
+            <button type="button" class="btn btn-secondary" id="match-change-photos" hidden>Change photos</button>
+          </div>
+        </div>
+        <aside class="inspector-panel">
+          <div class="inspector-head">
+            <span class="t-eyebrow">Match Look</span>
+          </div>
+          <label class="field-label" for="method">Method
             <select class="input" id="method">
               <option value="mkl">MKL (full covariance)</option>
               <option value="reinhard">Reinhard (mean/std)</option>
             </select>
           </label>
-          <button type="submit" class="btn btn-primary" id="match-submit" disabled>Run match look</button>
-        </form>
-
-        <div id="match-status" class="status"></div>
-
-        <div id="match-output" class="card" hidden>
-          <figure class="result-figure">
-            <img id="result-preview" alt="result" />
-            <figcaption class="t-caption">result</figcaption>
-          </figure>
-          <dl id="match-report" class="stat-list"></dl>
-          <a id="match-download" class="btn btn-secondary" href="#">Download full-precision TIFF</a>
-        </div>
+          <div id="match-status" class="status"></div>
+          <p id="match-placeholder" class="t-caption">Run match look to see quality stats.</p>
+          <dl id="match-report" class="stat-list" hidden></dl>
+          <a id="match-download" class="btn btn-secondary" href="#" hidden>Download full-precision TIFF</a>
+        </aside>
       </div>
     </section>
 
     <section id="view-face-regions" class="view">
       <div class="workspace">
-        <div class="viewport-slot face-viewport">
+        <div class="viewport-slot stage-viewport">
           <div class="face-stage">
             <div id="face-import-mount"></div>
             <div id="face-canvas-wrap" class="face-canvas-wrap" hidden>
               <canvas id="face-canvas"></canvas>
             </div>
           </div>
-          <div class="face-action-bar">
+          <div class="action-bar">
             <button type="button" class="btn btn-primary face-submit" id="face-submit" disabled>Find regions</button>
             <button type="button" class="btn btn-secondary" id="face-change-photo" hidden>Change photo</button>
           </div>
