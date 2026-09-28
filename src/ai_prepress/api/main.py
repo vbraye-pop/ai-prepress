@@ -12,6 +12,7 @@ import dataclasses
 import io
 import tempfile
 import uuid
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -121,6 +122,15 @@ class RetouchApplyRequest(BaseModel):
     mode: str  # "all_faces" | "per_face"
     strengths: RetouchStrengthsPayload = RetouchStrengthsPayload()
     per_face: dict[int, RetouchStrengthsPayload] = {}
+
+
+class DownloadAllFile(BaseModel):
+    result_id: str
+    filename: str  # the client's current (possibly renamed) display name, e.g. "Mug.tiff"
+
+
+class DownloadAllRequest(BaseModel):
+    files: list[DownloadAllFile]
 
 
 @app.post("/api/inspect")
@@ -300,6 +310,23 @@ async def api_layer_separation(image: UploadFile = File(...)):
             "layer_count": len(result.layers),
             "layers": layers_payload,
         }
+    )
+
+
+@app.post("/api/layer-separation/download-all")
+async def api_layer_separation_download_all(request: DownloadAllRequest):
+    """Zips whatever result_ids the client already has (from a prior /api/layer-separation
+    response) under the names currently shown in the UI, renames included - the browser is the
+    one place that knows what the user renamed each layer to, so it sends the mapping rather than
+    this endpoint guessing at names. No new storage concept: same _find_file every other
+    download-a-single-file route already uses."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for entry in request.files:
+            zf.write(_find_file(entry.result_id), arcname=entry.filename)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=layers.zip"}
     )
 
 
