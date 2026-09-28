@@ -38,7 +38,12 @@ def decompose_layers(
     endpoint: str | None = None,
     timeout: float = 600.0,
     poll_interval: float = 2.0,
+    layers: int | None = None,
 ) -> LayerSeparationResult:
+    """`layers=None` leaves the decision to the server's own DEFAULT_LAYER_COUNT - callers that
+    want the real per-photo count (features.layer_separation, via object_count) pass it
+    explicitly. Kept optional, not required, so this function stays usable standalone (direct
+    calls, tests) without needing a whole object-counting pipeline first."""
     endpoint = endpoint or os.environ.get("AI_PREPRESS_LAYER_SEPARATION_URL", "")
     if not endpoint:
         raise ValueError(
@@ -52,9 +57,11 @@ def decompose_layers(
     request_buffer = io.BytesIO()
     Image.fromarray(rgb_8bit).save(request_buffer, format="PNG")
 
+    submit_data = {"layers": layers} if layers is not None else {}
     submit_response = httpx.post(
         f"{endpoint}/submit",
         files={"file": ("image.png", request_buffer.getvalue(), "image/png")},
+        data=submit_data,
         timeout=30.0,
     )
     submit_response.raise_for_status()

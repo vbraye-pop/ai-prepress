@@ -48,10 +48,44 @@ def _zip_bytes(height: int, width: int, layer_count: int) -> bytes:
     return buffer.getvalue()
 
 
+def test_decompose_layers_passes_layers_through_when_given(monkeypatch):
+    captured = {}
+
+    def fake_post(url, files, data, timeout):
+        captured["data"] = data
+        return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
+
+    def fake_get(url, params, timeout):
+        return _fake_response(200, content=_zip_bytes(4, 4, 0), url=url)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    decompose_layers(_test_image(), endpoint="https://example.invalid", poll_interval=0, layers=6)
+    assert captured["data"] == {"layers": 6}
+
+
+def test_decompose_layers_omits_layers_when_not_given(monkeypatch):
+    captured = {}
+
+    def fake_post(url, files, data, timeout):
+        captured["data"] = data
+        return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
+
+    def fake_get(url, params, timeout):
+        return _fake_response(200, content=_zip_bytes(4, 4, 0), url=url)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    decompose_layers(_test_image(), endpoint="https://example.invalid", poll_interval=0)
+    assert captured["data"] == {}
+
+
 def test_decompose_layers_submits_then_polls_until_the_zip_is_ready(monkeypatch):
     calls = {"get": 0}
 
-    def fake_post(url, files, timeout):
+    def fake_post(url, files, data, timeout):
         assert url == "https://example.invalid/submit"
         return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
 
@@ -81,7 +115,7 @@ def test_decompose_layers_requires_an_endpoint(monkeypatch):
 
 
 def test_decompose_layers_raises_on_expiry(monkeypatch):
-    def fake_post(url, files, timeout):
+    def fake_post(url, files, data, timeout):
         return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
 
     def fake_get(url, params, timeout):
@@ -95,7 +129,7 @@ def test_decompose_layers_raises_on_expiry(monkeypatch):
 
 
 def test_decompose_layers_times_out(monkeypatch):
-    def fake_post(url, files, timeout):
+    def fake_post(url, files, data, timeout):
         return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
 
     def fake_get(url, params, timeout):
@@ -113,7 +147,7 @@ def test_decompose_layers_retries_a_transient_poll_failure(monkeypatch):
     # multi-minute call shouldn't abort the whole operation
     calls = {"get": 0}
 
-    def fake_post(url, files, timeout):
+    def fake_post(url, files, data, timeout):
         return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
 
     def fake_get(url, params, timeout):
@@ -131,7 +165,7 @@ def test_decompose_layers_retries_a_transient_poll_failure(monkeypatch):
 
 
 def test_decompose_layers_still_times_out_if_polling_never_recovers(monkeypatch):
-    def fake_post(url, files, timeout):
+    def fake_post(url, files, data, timeout):
         return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
 
     def fake_get(url, params, timeout):

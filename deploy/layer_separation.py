@@ -11,9 +11,11 @@ model's own README, not guessed):
 Two real-API facts that shape this file, discovered by reading the model card directly rather
 than assumed from the earlier general research pass:
 
-1. `layers` is a CALLER-SPECIFIED count, not auto-detected object count. DEFAULT_LAYER_COUNT below
-   is a fixed constant for this phase (matches the model's own documented example) - exposing it as
-   a user-facing control is real future work, not needed for the smallest useful slice.
+1. `layers` is a CALLER-SPECIFIED count - this model has no auto-detect mode of its own.
+   DEFAULT_LAYER_COUNT below is the fallback when a caller doesn't override it (also the value
+   `deploy/object_count.py` + `features/layer_separation.py` fall back to if the object-count
+   pre-flight step itself fails) - the real per-photo count now comes from that separate model,
+   not a fixed constant baked in here.
 2. The model has no separate "background" output - it returns N RGBA layers in bottom-to-top order
    (confirmed by the official repo's own PowerPoint-export instructions: "upload the layers in
    order - from the bottom layer to the top"). Layer 0 is therefore treated as the background plate
@@ -44,7 +46,7 @@ import io
 import zipfile
 
 import modal
-from fastapi import File, Response, UploadFile
+from fastapi import File, Form, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 MODEL_ID = "Qwen/Qwen-Image-Layered"
@@ -160,7 +162,7 @@ def web():
     web_app = FastAPI()
 
     @web_app.post("/submit")
-    async def submit(file: UploadFile = File(...)) -> Response:
+    async def submit(file: UploadFile = File(...), layers: int = Form(DEFAULT_LAYER_COUNT)) -> Response:
         contents = await file.read()
         # a plain in-module `LayerDecomposer().decompose.spawn(...)` fails here with
         # `AttributeError: 'function' object has no attribute 'spawn'` - discovered against a
@@ -168,7 +170,7 @@ def web():
         # inside another already-running container of the same app needs an explicit lookup by
         # name (the same mechanism cross-app calls use), not direct instantiation.
         decomposer_cls = modal.Cls.from_name("ai-prepress-layer-separation", "LayerDecomposer")
-        call = decomposer_cls().decompose.spawn(contents)
+        call = decomposer_cls().decompose.spawn(contents, layers=layers)
         return JSONResponse({"call_id": call.object_id})
 
     @web_app.get("/result")
