@@ -692,49 +692,146 @@ function setupLayerSeparation() {
   const mount = document.getElementById("layer-sep-import-mount");
   const placeholder = document.getElementById("layer-sep-placeholder");
   const status = document.getElementById("layer-sep-status");
-  const resultPair = document.getElementById("layer-sep-result-pair");
-  const backgroundPreview = document.getElementById("layer-sep-background-preview");
+  const canvasWrap = document.getElementById("layer-sep-canvas-wrap");
+  const canvas = document.getElementById("layer-sep-canvas");
+  const ctx = canvas.getContext("2d");
   const layerList = document.getElementById("layer-sep-list");
+  const showAllButton = document.getElementById("layer-sep-show-all");
+  const downloadAllButton = document.getElementById("layer-sep-download-all");
 
   let file = null;
+  // one row per stacking element, in DRAW order (bottom to top): original, background,
+  // layer 1..N ascending - matches the model's own bottom-to-top layer_index convention
+  // (see deploy/layer_separation.py's module docstring), so the sidebar list (which shows
+  // topmost-first, Photoshop convention) is a reversal of this array, not a second source of
+  // truth for ordering.
+  let rows = [];
 
   function resetState() {
     file = null;
+    rows = [];
     mount.hidden = false;
-    resultPair.hidden = true;
+    canvasWrap.hidden = true;
     changePhotoButton.hidden = true;
+    showAllButton.hidden = true;
     layerList.hidden = true;
     layerList.innerHTML = "";
+    downloadAllButton.hidden = true;
     placeholder.hidden = false;
     status.textContent = "";
     submitButton.disabled = true;
   }
 
-  function renderLayerList(backgroundId, layers) {
-    const backgroundRow = `
-      <li class="legend-item">
-        <label><span class="legend-swatch" style="background: var(--primary)"></span><span class="legend-name">Background</span></label>
-        <a class="btn-link" download="background.tiff" href="/api/file/${backgroundId}/download">Download</a>
-      </li>`;
-    const layerRows = layers.map(
-      (layer) => `
-      <li class="legend-item" data-layer-index="${layer.layer_index}">
-        <label>
-          <img class="legend-thumb" src="/api/file/${layer.result_id}/preview.png?t=${Date.now()}" alt="" />
-          <input type="text" class="legend-name-input" data-layer-index="${layer.layer_index}" value="Layer ${layer.layer_index + 1}" />
-        </label>
-        <a class="btn-link" data-download-for="${layer.layer_index}" download="Layer ${layer.layer_index + 1}.tiff" href="/api/file/${layer.result_id}/download">Download</a>
-      </li>`
+  function buildRows(result) {
+    const built = [
+      { kind: "original", label: "Original", resultId: result.file_id, visible: false, image: null },
+      { kind: "background", label: "Background", resultId: result.background_id, visible: true, image: null },
+    ];
+    for (const layer of result.layers) {
+      built.push({
+        kind: "layer",
+        label: `Layer ${layer.layer_index + 1}`,
+        resultId: layer.result_id,
+        visible: true,
+        image: null,
+        coverage: layer.alpha_coverage,
+      });
+    }
+    return built;
+  }
+
+  async function loadRowImages() {
+    await Promise.all(
+      rows.map(async (row) => {
+        row.image = await loadImage(`/api/file/${row.resultId}/preview.png?t=${Date.now()}`);
+      })
     );
-    layerList.innerHTML = backgroundRow + layerRows.join("");
+  }
+
+  function composite() {
+    const loaded = rows.find((row) => row.image);
+    if (!loaded) return;
+    canvas.width = loaded.image.naturalWidth;
+    canvas.height = loaded.image.naturalHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // draw order is `rows`' own order (bottom to top) - checkerboard shows through wherever no
+    // visible row covers a pixel, same as any real layered file
+    for (const row of rows) {
+      if (row.visible && row.image) ctx.drawImage(row.image, 0, 0);
+    }
+  }
+
+  function rowMarkup(row) {
+    const index = rows.indexOf(row);
+    const thumbSrc = `/api/file/${row.resultId}/preview.png?t=${Date.now()}`;
+    const nameHtml =
+      row.kind === "layer"
+        ? `<input type="text" class="legend-name-input" data-row-index="${index}" value="${row.label}" />`
+        : `<span class="legend-name">${row.label}</span>`;
+    const coverageHtml =
+      row.kind === "layer" ? `<span class="tag tag-indigo layer-sep-coverage">${Math.round(row.coverage * 100)}%</span>` : "";
+    return `
+      <li class="legend-item">
+        <div class="legend-item-main">
+          <input type="checkbox" class="layer-sep-eye" data-row-index="${index}" ${row.visible ? "checked" : ""} />
+          <img class="legend-thumb checkerboard" data-row-index="${index}" src="${thumbSrc}" alt="" title="Click to view this alone" />
+          ${nameHtml}
+        </div>
+        <div class="legend-item-side">
+          ${coverageHtml}
+          <a class="btn-link" data-download-for="${index}" download="${row.label}.tiff" href="/api/file/${row.resultId}/download">Download</a>
+        </div>
+      </li>`;
+  }
+
+  function renderList() {
+    // sidebar shows topmost-first (Photoshop convention) - a reversal of `rows`' own bottom-to-
+    // top draw order, not a second ordering to keep in sync
+    const original = rows.find((row) => row.kind === "original");
+    const layers = rows
+      .filter((row) => row.kind === "layer")
+      .slice()
+      .reverse();
+    const background = rows.find((row) => row.kind === "background");
+
+    const sections = [rowMarkup(original)];
+    if (layers.length) {
+      sections.push('<hr class="layer-sep-divider" />', ...layers.map(rowMarkup));
+    }
+    sections.push('<hr class="layer-sep-divider" />', rowMarkup(background));
+
+    layerList.innerHTML = sections.join("");
     layerList.hidden = false;
+    showAllButton.hidden = false;
+    downloadAllButton.hidden = false;
+
+    layerList.querySelectorAll(".layer-sep-eye").forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        rows[Number(checkbox.dataset.rowIndex)].visible = checkbox.checked;
+        composite();
+      });
+    });
+
+    // click-to-solo (a real Photoshop convention: alt/option-clicking an eye icon) - "Show all"
+    // is the deliberately simple way back, not a remembered-previous-state toggle
+    layerList.querySelectorAll(".legend-thumb").forEach((thumb) => {
+      thumb.addEventListener("click", () => {
+        const soloIndex = Number(thumb.dataset.rowIndex);
+        rows.forEach((row, i) => (row.visible = i === soloIndex));
+        renderList();
+        composite();
+      });
+    });
 
     // the manual-rename field standing in for the naming VLM (see the plan's roadmap) - purely
-    // client-side, no backend change, the download link's own filename attribute picks it up
+    // client-side, no backend change, both the download link and "Download all"'s payload read
+    // the row's own current label
     layerList.querySelectorAll(".legend-name-input").forEach((input) => {
       input.addEventListener("input", () => {
-        const link = layerList.querySelector(`[data-download-for="${input.dataset.layerIndex}"]`);
-        if (link) link.download = `${input.value || `Layer ${Number(input.dataset.layerIndex) + 1}`}.tiff`;
+        const index = Number(input.dataset.rowIndex);
+        rows[index].label = input.value || rows[index].label;
+        const link = layerList.querySelector(`[data-download-for="${index}"]`);
+        if (link) link.download = `${rows[index].label}.tiff`;
       });
     });
   }
@@ -757,12 +854,58 @@ function setupLayerSeparation() {
     resetState();
   });
 
+  showAllButton.addEventListener("click", () => {
+    rows.forEach((row) => (row.visible = true));
+    renderList();
+    composite();
+  });
+
+  downloadAllButton.addEventListener("click", async () => {
+    const files = rows
+      .filter((row) => row.kind !== "original")
+      .map((row) => ({ result_id: row.resultId, filename: `${row.label}.tiff` }));
+
+    downloadAllButton.disabled = true;
+    downloadAllButton.textContent = "Zipping...";
+
+    let response;
+    try {
+      response = await fetch("/api/layer-separation/download-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files }),
+      });
+    } catch (err) {
+      status.textContent = `download failed: ${err}`;
+      downloadAllButton.disabled = false;
+      downloadAllButton.textContent = "Download all (.zip)";
+      return;
+    }
+    if (!response.ok) {
+      status.textContent = `server error: ${response.status}`;
+      downloadAllButton.disabled = false;
+      downloadAllButton.textContent = "Download all (.zip)";
+      return;
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "layers.zip";
+    link.click();
+    URL.revokeObjectURL(url);
+
+    downloadAllButton.disabled = false;
+    downloadAllButton.textContent = "Download all (.zip)";
+  });
+
   submitButton.addEventListener("click", async () => {
     if (!file) return;
 
     submitButton.disabled = true;
     status.textContent = "separating layers - this can take a few minutes on a cold start...";
-    resultPair.hidden = true;
+    canvasWrap.hidden = true;
     layerList.hidden = true;
 
     const body = new FormData();
@@ -783,6 +926,17 @@ function setupLayerSeparation() {
     }
 
     const result = await response.json();
+    status.textContent = "loading previews...";
+
+    rows = buildRows(result);
+    try {
+      await loadRowImages();
+    } catch (err) {
+      status.textContent = `couldn't load previews: ${err}`;
+      submitButton.disabled = false;
+      return;
+    }
+
     status.textContent =
       result.layer_count === 0
         ? "no separable layers found - showing the reconstructed background only"
@@ -790,12 +944,12 @@ function setupLayerSeparation() {
           ? "1 layer separated"
           : `${result.layer_count} layers separated`;
 
-    backgroundPreview.src = `/api/file/${result.background_id}/preview.png?t=${Date.now()}`;
-    renderLayerList(result.background_id, result.layers);
+    renderList();
+    composite();
 
     placeholder.hidden = true;
     mount.hidden = true;
-    resultPair.hidden = false;
+    canvasWrap.hidden = false;
     changePhotoButton.hidden = false;
     submitButton.disabled = false;
   });

@@ -211,11 +211,8 @@
         <div class="viewport-slot stage-viewport">
           <div class="compare-stage">
             <div id="layer-sep-import-mount"></div>
-            <div class="layer-sep-result" id="layer-sep-result-pair" hidden>
-              <div class="compare-slot">
-                <span class="t-eyebrow">Background</span>
-                <img id="layer-sep-background-preview" class="compare-preview-img" alt="reconstructed background" />
-              </div>
+            <div class="layer-sep-canvas-wrap checkerboard" id="layer-sep-canvas-wrap" hidden>
+              <canvas id="layer-sep-canvas"></canvas>
             </div>
           </div>
           <div class="action-bar">
@@ -229,7 +226,9 @@
           </div>
           <div id="layer-sep-status" class="status"></div>
           <p id="layer-sep-placeholder" class="t-caption">Import a photo to separate it into usable layers plus a filled background.</p>
+          <button type="button" class="btn-link" id="layer-sep-show-all" hidden>Show all</button>
           <ul id="layer-sep-list" class="legend-list" hidden></ul>
+          <button type="button" class="btn btn-secondary" id="layer-sep-download-all" hidden>Download all (.zip)</button>
         </aside>
       </div>
     </section>
