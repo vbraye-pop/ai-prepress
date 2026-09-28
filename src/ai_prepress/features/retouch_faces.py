@@ -1,12 +1,15 @@
 """Retouch Faces: low-frequency masked edits for Dark Circles, Even Skin, and Contouring.
 
 Capture One's own copy describes all three as smooth, region-scoped tone/shading operations
-(dark circles = soften+brighten, even skin = contrast reduction, contouring = shading) - none
-of them touch texture. That maps directly onto classical frequency separation: split the image
-into a low-frequency (LF, tone/shading) layer and a high-frequency (HF, texture/pores/detail)
-layer, edit LF only inside a region mask, recombine with the UNTOUCHED HF layer. The HF layer
-never being touched is what makes "waxy skin" impossible by construction, rather than relying on
-a generative model not to over-smooth - see the "retouch-faces-sota" project note.
+(dark circles = soften+brighten, even skin = contrast reduction, contouring = shading). That
+maps directly onto classical frequency separation: split the image into a low-frequency (LF,
+tone/shading) layer and a high-frequency (HF, texture/pores/detail) layer, edit LF only inside
+a region mask, recombine with the HF layer. Dark Circles and Contouring never touch HF at all -
+that's what makes "waxy skin" impossible by construction for those two, rather than relying on a
+generative model not to over-smooth (see the "retouch-faces-sota" project note). Even Skin's
+Texture control is the one deliberate exception: Capture One's own panel has a signed Texture
+slider alongside Amount, independently confirmed from their blog - it scales HF within the
+even_skin mask rather than leaving it untouched, on purpose (see RetouchStrengths).
 
 Blemish removal (the 4th sub-tool) isn't here - it's a genuinely different, discrete detect-and-
 inpaint task, not a frequency-separation one, and needs a generative model this project doesn't
@@ -109,7 +112,12 @@ def rasterize_mask(
 @dataclass
 class RetouchStrengths:
     dark_circles: float = 0.0  # 0-1, brighten under-eye
-    even_skin: float = 0.0  # 0-1, pull skin tone toward its own regional mean
+    even_skin: float = 0.0  # 0-1 "Amount" - pull skin tone toward its own regional mean
+    even_skin_texture: float = 0.0  # -1..1 "Texture" - HF retention within the even_skin mask.
+    # 0 is today's default (HF untouched), matching Capture One's own Even Skin panel: negative
+    # suppresses high-frequency detail beyond what Amount alone does (their own worked example,
+    # "80 Amount / -70 Texture", is described as an editorial-polish look), positive mildly
+    # boosts it back (capped well short of oversharpening - see _texture_multiplier).
     contouring: float = 0.0  # 0-1, darken cheek - the crudest of the three, see module docstring
 
 
@@ -146,6 +154,15 @@ def _apply_even_skin(lf: np.ndarray, mask: np.ndarray, strength: float, regional
     return lf + mask[..., None] * strength * (regional - lf)
 
 
+def _texture_multiplier(mask: np.ndarray, texture: float) -> np.ndarray:
+    """A per-pixel HF multiplier for the even_skin region - 1.0 (unchanged) outside the mask,
+    ramping toward `1 + texture` inside it. texture in [-1, 0) suppresses fine detail (more
+    flattening than Amount alone gives); (0, 1] mildly restores/boosts it, capped at 1.3x so
+    this stays "restore some texture" rather than an open-ended sharpen."""
+    factor = 1.0 + np.clip(texture, -1.0, 0.3)
+    return 1.0 + mask * (factor - 1.0)
+
+
 def _apply_contouring(lf: np.ndarray, mask: np.ndarray, strength: float) -> np.ndarray:
     # plain darken, not a real lighting-aware shading model - Capture One's own copy describes
     # contouring as analyzing facial lighting to deepen existing shadows, which this doesn't do.
@@ -157,7 +174,8 @@ def _apply_contouring(lf: np.ndarray, mask: np.ndarray, strength: float) -> np.n
 def retouch_faces(image: LoadedImage, strengths: RetouchStrengths) -> LoadedImage | None:
     """Returns None if no face is detected - a photo without one is a real case the caller
     should handle, not a hidden failure. LF/HF split runs once regardless of how many effects
-    are active; each active effect edits the shared LF layer, HF is never touched."""
+    are active; each active effect edits the shared LF layer. HF stays untouched except where
+    Even Skin's Texture control deliberately scales it (see RetouchStrengths.even_skin_texture)."""
     unit = to_unit_float(image.array)[..., :3]
     rgb_8bit = (np.clip(unit, 0.0, 1.0) * 255 + 0.5).astype(np.uint8)
 
@@ -172,6 +190,7 @@ def retouch_faces(image: LoadedImage, strengths: RetouchStrengths) -> LoadedImag
     lf_sigma = max(2.0, face_width * 0.05)
     lf = _gaussian_blur(unit, lf_sigma)
     hf = unit - lf
+    hf_multiplier = np.ones((height, width), dtype=np.float64)
 
     if strengths.dark_circles > 0:
         for side in ("right", "left"):
@@ -183,13 +202,15 @@ def retouch_faces(image: LoadedImage, strengths: RetouchStrengths) -> LoadedImag
         mask = rasterize_mask(oval, (height, width), cutouts=cutouts, feather=feather * 1.5)
         regional = _masked_regional_blur(lf, mask, sigma=lf_sigma * 4)
         lf = _apply_even_skin(lf, mask, strengths.even_skin, regional)
+        if strengths.even_skin_texture != 0:
+            hf_multiplier *= _texture_multiplier(mask, strengths.even_skin_texture)
 
     if strengths.contouring > 0:
         for side in ("right", "left"):
             mask = rasterize_mask(cheek_region(landmarks, side), (height, width), feather=feather)
             lf = _apply_contouring(lf, mask, strengths.contouring)
 
-    result_unit = np.clip(lf + hf, 0.0, 1.0)
+    result_unit = np.clip(lf + hf * hf_multiplier[..., None], 0.0, 1.0)
     icc_profile = image.icc_profile
     if icc_profile is None:
         # io.save() requires one - same fallback match_look.py uses for the same reason

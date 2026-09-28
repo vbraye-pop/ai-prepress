@@ -90,6 +90,32 @@ def test_retouch_faces_fills_in_a_missing_icc_profile(monkeypatch):
     assert result.icc_profile is not None
 
 
+def test_even_skin_texture_zero_matches_default_hf_retention(monkeypatch):
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    image = _fake_image()
+    with_texture_zero = retouch_faces(image, RetouchStrengths(even_skin=0.5, even_skin_texture=0.0))
+    without_texture_field = retouch_faces(image, RetouchStrengths(even_skin=0.5))
+    assert np.allclose(with_texture_zero.array, without_texture_field.array)
+
+
+def test_negative_even_skin_texture_lowers_local_variance_more_than_positive(monkeypatch):
+    monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
+    image = _fake_image()
+    landmarks = _fake_landmarks()
+    from ai_prepress.face_landmarks import skin_region
+
+    oval, _ = skin_region(landmarks)
+    cy, cx = int(oval[:, 1].mean()), int(oval[:, 0].mean())
+    patch = np.s_[cy - 5 : cy + 5, cx - 5 : cx + 5]
+
+    # same Amount (smoothing strength) in both calls, only Texture differs - negative Texture
+    # should leave less pixel-to-pixel variance (less "texture") in the masked region than
+    # positive Texture, which mildly boosts the original high-frequency detail back in
+    flattened = retouch_faces(image, RetouchStrengths(even_skin=0.5, even_skin_texture=-1.0))
+    detailed = retouch_faces(image, RetouchStrengths(even_skin=0.5, even_skin_texture=1.0))
+    assert flattened.array[patch].std() < detailed.array[patch].std()
+
+
 def test_retouch_faces_brightens_the_under_eye_region(monkeypatch):
     monkeypatch.setattr(retouch_module, "detect_landmarks", lambda rgb: _fake_landmarks())
     image = _fake_image()
