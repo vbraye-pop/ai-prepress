@@ -26,6 +26,7 @@
       <button class="pill-tab" data-view="match-look" data-active="false">Match Look</button>
       <button class="pill-tab" data-view="face-regions" data-active="false">Face Regions</button>
       <button class="pill-tab" data-view="retouch-faces" data-active="false">Retouch Faces</button>
+      <button class="pill-tab" data-view="layer-separation" data-active="false">Layer Separation</button>
     </nav>
   </header>
 
@@ -202,6 +203,33 @@
 
           <dl id="retouch-report" class="stat-list" hidden></dl>
           <a id="retouch-download" class="btn btn-secondary" href="#" hidden>Download full-precision TIFF</a>
+        </aside>
+      </div>
+    </section>
+    <section id="view-layer-separation" class="view">
+      <div class="workspace">
+        <div class="viewport-slot stage-viewport">
+          <div class="compare-stage">
+            <div id="layer-sep-import-mount"></div>
+            <div class="layer-sep-result" id="layer-sep-result-pair" hidden>
+              <div class="compare-slot">
+                <span class="t-eyebrow">Background</span>
+                <img id="layer-sep-background-preview" class="compare-preview-img" alt="reconstructed background" />
+              </div>
+            </div>
+          </div>
+          <div class="action-bar">
+            <button type="button" class="btn btn-primary" id="layer-sep-submit" disabled>Separate layers</button>
+            <button type="button" class="btn btn-secondary" id="layer-sep-change-photo" hidden>Change photo</button>
+          </div>
+        </div>
+        <aside class="inspector-panel">
+          <div class="inspector-head">
+            <span class="t-eyebrow">Layer Separation</span>
+          </div>
+          <div id="layer-sep-status" class="status"></div>
+          <p id="layer-sep-placeholder" class="t-caption">Import a photo to separate it into usable layers plus a filled background.</p>
+          <ul id="layer-sep-list" class="legend-list" hidden></ul>
         </aside>
       </div>
     </section>

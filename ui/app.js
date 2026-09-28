@@ -686,8 +686,124 @@ function setupRetouchFaces() {
   });
 }
 
+function setupLayerSeparation() {
+  const submitButton = document.getElementById("layer-sep-submit");
+  const changePhotoButton = document.getElementById("layer-sep-change-photo");
+  const mount = document.getElementById("layer-sep-import-mount");
+  const placeholder = document.getElementById("layer-sep-placeholder");
+  const status = document.getElementById("layer-sep-status");
+  const resultPair = document.getElementById("layer-sep-result-pair");
+  const backgroundPreview = document.getElementById("layer-sep-background-preview");
+  const layerList = document.getElementById("layer-sep-list");
+
+  let file = null;
+
+  function resetState() {
+    file = null;
+    mount.hidden = false;
+    resultPair.hidden = true;
+    changePhotoButton.hidden = true;
+    layerList.hidden = true;
+    layerList.innerHTML = "";
+    placeholder.hidden = false;
+    status.textContent = "";
+    submitButton.disabled = true;
+  }
+
+  function renderLayerList(backgroundId, layers) {
+    const backgroundRow = `
+      <li class="legend-item">
+        <label><span class="legend-swatch" style="background: var(--primary)"></span><span class="legend-name">Background</span></label>
+        <a class="btn-link" download="background.tiff" href="/api/file/${backgroundId}/download">Download</a>
+      </li>`;
+    const layerRows = layers.map(
+      (layer) => `
+      <li class="legend-item" data-layer-index="${layer.layer_index}">
+        <label>
+          <img class="legend-thumb" src="/api/file/${layer.result_id}/preview.png?t=${Date.now()}" alt="" />
+          <input type="text" class="legend-name-input" data-layer-index="${layer.layer_index}" value="Layer ${layer.layer_index + 1}" />
+        </label>
+        <a class="btn-link" data-download-for="${layer.layer_index}" download="Layer ${layer.layer_index + 1}.tiff" href="/api/file/${layer.result_id}/download">Download</a>
+      </li>`
+    );
+    layerList.innerHTML = backgroundRow + layerRows.join("");
+    layerList.hidden = false;
+
+    // the manual-rename field standing in for the naming VLM (see the plan's roadmap) - purely
+    // client-side, no backend change, the download link's own filename attribute picks it up
+    layerList.querySelectorAll(".legend-name-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const link = layerList.querySelector(`[data-download-for="${input.dataset.layerIndex}"]`);
+        if (link) link.download = `${input.value || `Layer ${Number(input.dataset.layerIndex) + 1}`}.tiff`;
+      });
+    });
+  }
+
+  const importer = createImageImport({
+    label: "Drop a photo here",
+    hint: "or click to browse",
+    onFile: (chosenFile) => {
+      resetState();
+      if (chosenFile) {
+        file = chosenFile;
+        submitButton.disabled = false;
+      }
+    },
+  });
+  mount.appendChild(importer.el);
+
+  changePhotoButton.addEventListener("click", () => {
+    importer.reset();
+    resetState();
+  });
+
+  submitButton.addEventListener("click", async () => {
+    if (!file) return;
+
+    submitButton.disabled = true;
+    status.textContent = "separating layers - this can take a few minutes on a cold start...";
+    resultPair.hidden = true;
+    layerList.hidden = true;
+
+    const body = new FormData();
+    body.append("image", file);
+
+    let response;
+    try {
+      response = await fetch("/api/layer-separation", { method: "POST", body });
+    } catch (err) {
+      status.textContent = `request failed: ${err}`;
+      submitButton.disabled = false;
+      return;
+    }
+    if (!response.ok) {
+      status.textContent = `server error: ${response.status}`;
+      submitButton.disabled = false;
+      return;
+    }
+
+    const result = await response.json();
+    status.textContent =
+      result.layer_count === 0
+        ? "no separable layers found - showing the reconstructed background only"
+        : result.layer_count === 1
+          ? "1 layer separated"
+          : `${result.layer_count} layers separated`;
+
+    backgroundPreview.src = `/api/file/${result.background_id}/preview.png?t=${Date.now()}`;
+    renderLayerList(result.background_id, result.layers);
+
+    placeholder.hidden = true;
+    mount.hidden = true;
+    resultPair.hidden = false;
+    changePhotoButton.hidden = false;
+    submitButton.disabled = false;
+  });
+}
+
 setupViewTabs();
 setupInspect();
 setupMatchLook();
 setupFaceRegions();
 setupRetouchFaces();
+setupLayerSeparation();

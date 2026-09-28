@@ -275,6 +275,33 @@ a.btn {
   border-radius: 4px;
   object-fit: cover;
   flex: 0 0 auto;
+  /* checkerboard so an RGBA thumbnail's own transparency is visible against the swatch,
+     not just against whatever the page background happens to be */
+  background-image:
+    linear-gradient(45deg, var(--hairline) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--hairline) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--hairline) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--hairline) 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+
+.legend-name-input {
+  width: 96px;
+  height: 22px;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  font: 500 13px/1.4 var(--font-sans);
+}
+
+.legend-name-input:hover,
+.legend-name-input:focus {
+  background: var(--surface-sunken);
+  border-color: var(--hairline-strong);
+  outline: none;
 }
 
 .legend-count {
@@ -321,6 +348,18 @@ a.btn {
 .compare-import-mount {
   flex: 1;
   min-height: 0;
+}
+
+/* Layer Separation only ever shows one preview slot (Background), not the 2-up grid every
+   other .compare-stage user needs - .compare-pair's fixed 2-column grid would leave a dead
+   empty column, so this is its own single-slot overlay rather than a reuse of .compare-pair.
+   No explicit `display` here (defaults to the UA block value), so [hidden]'s own UA-origin
+   `display: none` isn't fighting an author-origin override the way .compare-pair's does -
+   no paired [hidden] rule needed, unlike .compare-pair/.face-canvas-wrap/.btn above. */
+.compare-stage > #layer-sep-import-mount,
+.layer-sep-result {
+  position: absolute;
+  inset: 0;
 }
 
 .compare-preview-img {
