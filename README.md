@@ -4,7 +4,7 @@ A standalone tool for the print/retouching side of an AI image pipeline: color m
 
 ![Inspect view showing a loaded image next to its real dimensions, bit depth, and ICC profile fields](assets/screenshot.png)
 
-Early stage. What's here right now: a shared image I/O layer, an acceptance-check utility, an image inspector (real dimensions, bit depth, ICC profile, EXIF, raw tags), Match Look (the first of seven planned Capture One-parity features), a local FastAPI service, and a dark-themed HTML/JS front end. Masking, AI crop, face retouch, dust removal, background replacement and snap-to-eye aren't built yet.
+Early stage. What's here right now: a shared image I/O layer, an acceptance-check utility, an image inspector (real dimensions, bit depth, ICC profile, EXIF, raw tags), Match Look, Face Regions + Retouch Faces (Dark Circles/Even Skin/Contouring, running locally via MediaPipe landmarks), a local FastAPI service, and a dark-themed HTML/JS front end. Masking, AI crop, Blemish removal, dust removal, background replacement and snap-to-eye aren't built yet.
 
 ## How it works
 
@@ -56,7 +56,7 @@ Needs Python 3.12 - pinned deliberately rather than using whatever's newest on t
 
 ## Usage
 
-Run the API and UI (the face-parsing tab needs the deployed Modal endpoint URL - it's stable across redeploys, so this is a real, current value, not a placeholder to fill in):
+Run the API and UI - no environment variables needed, every feature currently in the UI runs locally:
 
 ```bash
 uv run uvicorn ai_prepress.api.main:app --reload
@@ -149,4 +149,4 @@ No scipy, and PIL's `GaussianBlur` flatly refuses float-mode images (confirmed b
 - [ ] Background Replacement
 - [ ] Snap to Eye - blocked on a scope call, Capture One's actual feature is a coarse focus-check aid, not a precision alignment tool, and it's not clear yet which one is wanted here
 
-Standalone desktop tool, not a Photoshop plugin, but the core is a plain package behind a local HTTP API specifically so a plugin (or a local-inference mode, later) can become just another client instead of a rewrite. Every model-tier step for now calls out to RunPod/Modal rather than running locally - compute isn't the constraint here, keeping v1 simple is.
+Standalone desktop tool, not a Photoshop plugin, but the core is a plain package behind a local HTTP API specifically so a plugin (or a different deployment shape, later) can become just another client instead of a rewrite. The original plan routed every model-tier step through RunPod/Modal for v1 simplicity - in practice, MediaPipe's CPU path turned out fast enough that Face Regions and Retouch Faces both run entirely locally instead, no deployment needed. `deploy/face_parsing.py` (the retired Modal-hosted semantic parser, see above) is the one remaining example of the originally-planned remote-model pattern, kept as reference.
