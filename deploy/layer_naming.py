@@ -25,12 +25,16 @@ Two real integration details, confirmed from the model card's own reference code
 
 Deploy: uv run --group deploy modal deploy deploy/layer_naming.py
 
-Fast enough (2.3B params, ~4.6GB weights in bf16, a batch of small single-object crops) to be a
-plain synchronous web endpoint, same reasoning as deploy/object_count.py - no submit/result split
-needed, unlike deploy/layer_separation.py's multi-minute diffusion call. Measured, not estimated:
-~48s for a real 3-crop batch on a T4, comfortably under Modal's 150s web-endpoint ceiling but
-meaningfully slower than "a few seconds" - worth remembering when this runs after a multi-minute
-decompose call, since it adds real, non-trivial wall-clock on top of it.
+Fast enough (2.3B params, ~4.6GB weights in bf16, small single-object crops named one at a time -
+see the `name` endpoint below for why not batched) to be a plain synchronous web endpoint, same
+reasoning as deploy/object_count.py - no submit/result split needed, unlike
+deploy/layer_separation.py's multi-minute diffusion call. Measured, not estimated: a real 6-crop
+request (art.jpg) took 77s sequential on a T4, under Modal's 150s web-endpoint ceiling but with
+less headroom than the old batched call had - MAX_LAYERS=8 in features/layer_separation.py hasn't
+itself been measured against this endpoint and could plausibly approach that ceiling. Meaningfully
+slower than "a few seconds" either way - worth remembering when this runs after a multi-minute
+decompose call, since it adds real, non-trivial wall-clock on top of it
+(ai_prepress/layer_naming.py's own client timeout is set to 300s to match).
 
 torch/transformers/PIL are only ever imported inside the function body below, never at module
 level - same reasoning as every other deploy script in this project.

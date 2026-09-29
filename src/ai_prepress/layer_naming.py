@@ -11,8 +11,11 @@ layer is composited onto a flat white background (paste with the layer's own alp
 the standard PIL idiom for this) before being sent over the wire - the deploy script itself never
 needs to know about alpha at all.
 
-One request labels every layer of a photo at once via the model's own batch_chat API, rather than
-one round trip per layer.
+One HTTP request still labels every layer of a photo, but the server names them one at a time
+internally (see deploy/layer_naming.py for why: batching them into one model.batch_chat call
+OOMs a T4 on a real multi-layer photo). Default timeout is 300s, not the 60s a single-shot batch
+call would have justified - a real deployed 6-layer request took 77s sequential, and MAX_LAYERS
+in features/layer_separation.py allows up to 8.
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ def _flatten_to_white(image: LoadedImage) -> bytes:
     return buffer.getvalue()
 
 
-def name_layers(layers: list[LoadedImage], endpoint: str | None = None, timeout: float = 60.0) -> list[str]:
+def name_layers(layers: list[LoadedImage], endpoint: str | None = None, timeout: float = 300.0) -> list[str]:
     if not layers:
         return []
 
