@@ -3,8 +3,8 @@
 Second stage of the per-instance separation pipeline: turns each candidate box from
 ai_prepress.object_detect into a pixel-accurate alpha mask via box-prompted SAM2.
 
-Coordinate-space contract, shared verbatim with ai_prepress.object_detect (its sibling in this
-pipeline stage) - both modules keep this paragraph identical: boxes are absolute pixel XYXY
+Coordinate-space contract - the invariant sentence below is shared verbatim with
+ai_prepress.object_detect (its sibling in this pipeline stage): boxes are absolute pixel XYXY
 floats in the coordinate space of the image EXACTLY as passed in, no resizing on either side of
 the wire.
 

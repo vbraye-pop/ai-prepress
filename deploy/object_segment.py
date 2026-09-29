@@ -18,13 +18,13 @@ Real inference API (from facebookresearch/sam2's own sam2_image_predictor.py, no
     masks, scores, _ = predictor.predict(box=box, multimask_output=True)   # cheap, per box
     best = masks[np.argmax(scores)]
 
-Coordinate-space contract, shared verbatim with deploy/object_detect.py (its sibling in this
-pipeline stage) - both files keep this paragraph identical: boxes are absolute pixel XYXY floats
-in the coordinate space of the image EXACTLY as uploaded, no server-side resizing. This endpoint's
-own set_image() is called once on that same unresized array, and predict()'s own default
+Coordinate-space contract - the invariant sentence below is shared verbatim with
+deploy/object_detect.py (its sibling in this pipeline stage), so a reader of either file sees the
+same guarantee in the same words: boxes are absolute pixel XYXY floats in the coordinate space of
+the image EXACTLY as uploaded, no server-side resizing. On this endpoint's own side, that holds
+because set_image() is called once on that same unresized array, and predict()'s own default
 (normalize_coords=True, not overridden here) reads box coordinates in the resolution set_image()
-was given - so passing boxes through unmodified end to end is what keeps this contract true on
-this side of the wire.
+was given - so passing boxes through unmodified end to end is what keeps the contract true here.
 
 Deploy: uv run --group deploy modal deploy deploy/object_segment.py
 
