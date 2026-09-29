@@ -36,12 +36,26 @@ def _default_enhancement_mocks(monkeypatch):
     """object_count and layer_naming are real remote calls - default every test to a working,
     uninteresting mock for both so tests that only care about the core compositing/contamination
     logic don't need to know about either. Tests that specifically exercise count/naming behavior
-    override these within their own body (a later monkeypatch.setattr in the same test wins)."""
+    override these within their own body (a later monkeypatch.setattr in the same test wins).
+
+    separate_layers() tries the per-instance pipeline FIRST (see features/layer_separation.py's
+    module docstring) - defaulting list_candidate_objects to "no candidates" makes every one of
+    the Qwen-path tests below exercise the REAL fallback, not a second mocked path nobody
+    exercises. The other three per-instance clients are stubbed too for the same reason
+    object_count/layer_naming are: so a test that doesn't care about them never needs to know they
+    exist."""
     monkeypatch.setattr(layer_separation_module.object_count, "count_objects", lambda image: 1)
     monkeypatch.setattr(
         layer_separation_module.layer_naming,
         "name_layers",
         lambda layers: [None] * len(layers),
+    )
+    monkeypatch.setattr(layer_separation_module.layer_naming, "list_candidate_objects", lambda image, timeout=None: [])
+    monkeypatch.setattr(layer_separation_module.object_detect, "detect_objects", lambda image, text_prompt, timeout=None: [])
+    monkeypatch.setattr(layer_separation_module.object_segment, "segment_boxes", lambda image, boxes, timeout=None: [])
+    monkeypatch.setattr(layer_separation_module.instance_matte, "matte_crops", lambda crops, timeout=None: [])
+    monkeypatch.setattr(
+        layer_separation_module.background_inpaint, "inpaint_background", lambda source_image, mask, timeout=None: source_image
     )
 
 
@@ -356,3 +370,206 @@ def test_separate_layers_caps_repair_attempts(monkeypatch):
     # call + 2 repair calls = 3 total, not 4)
     assert len(calls) == 3
     assert len(result.layers) == 3
+
+
+# --- per-instance pipeline (primary path) -------------------------------------------------------
+
+
+def _detection(label, box, score=0.8) -> dict:
+    return {"label": label, "score": score, "box": box}
+
+
+def test_build_detection_prompt_joins_names_with_periods():
+    prompt = layer_separation_module._build_detection_prompt(["pitcher", "orange.", "  book  "])
+    assert prompt == "pitcher. orange. book."
+
+
+def test_dedupe_detections_merges_overlapping_boxes_regardless_of_label():
+    book = _detection("book", [0, 0, 10, 10], score=0.9)
+    brown_book = _detection("brown book", [1, 1, 10, 10], score=0.6)  # same real object, near-synonym
+    orange = _detection("orange", [50, 50, 60, 60], score=0.8)  # unrelated, must survive
+
+    kept = layer_separation_module._dedupe_detections([brown_book, book, orange])
+
+    assert len(kept) == 2
+    labels = {d["label"] for d in kept}
+    assert labels == {"book", "orange"}  # the higher-score duplicate wins, not just the first seen
+
+
+def test_separate_layers_uses_per_instance_pipeline_when_detections_found(monkeypatch):
+    inpainted_plate = np.full((20, 20, 3), 42, dtype=np.uint8)
+    mask = _square_alpha(20, 20, 2, 10, 2, 10)
+
+    monkeypatch.setattr(layer_separation_module.layer_naming, "list_candidate_objects", lambda image, timeout=None: ["mug"])
+    monkeypatch.setattr(
+        layer_separation_module.object_detect,
+        "detect_objects",
+        lambda image, text_prompt, timeout=None: [_detection("mug", [2, 2, 10, 10])],
+    )
+    monkeypatch.setattr(layer_separation_module.object_segment, "segment_boxes", lambda image, boxes, timeout=None: [mask])
+    monkeypatch.setattr(
+        layer_separation_module.instance_matte,
+        "matte_crops",
+        lambda crops, timeout=None: [np.full(crops[0].shape[:2], 255, dtype=np.uint8)],  # agrees with SAM2 fully
+    )
+    monkeypatch.setattr(
+        layer_separation_module.background_inpaint, "inpaint_background", lambda source_image, mask, timeout=None: inpainted_plate
+    )
+
+    result = separate_layers(_source_image(20, 20))
+
+    assert result.separation_path == "per-instance"
+    assert result.requested_layers == 1
+    assert len(result.layers) == 1
+    assert result.layers[0].suggested_name == "mug"
+    assert result.layers[0].bbox == (2, 2, 10, 10)
+    assert np.array_equal(result.background.array, inpainted_plate)
+
+
+def test_separate_layers_falls_back_to_qwen_when_no_candidate_objects(monkeypatch):
+    # the default autouse fixture already stubs list_candidate_objects -> [] - this test just
+    # makes the resulting fallback explicit rather than incidental
+    canned = _canned_result(8, 8)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
+
+    result = separate_layers(_source_image())
+    assert result.separation_path == "qwen"
+
+
+def test_separate_layers_falls_back_to_qwen_when_detections_empty_after_dedupe(monkeypatch):
+    canned = _canned_result(8, 8)
+    monkeypatch.setattr(
+        layer_separation_module.layer_decompose, "decompose_layers", lambda image, endpoint=None, layers=None: canned
+    )
+    monkeypatch.setattr(layer_separation_module.layer_naming, "list_candidate_objects", lambda image, timeout=None: ["ghost"])
+    monkeypatch.setattr(layer_separation_module.object_detect, "detect_objects", lambda image, text_prompt, timeout=None: [])
+
+    result = separate_layers(_source_image())
+    assert result.separation_path == "qwen"
+
+
+def test_separate_layers_matte_sam_iou_guard_falls_back_to_sam2_mask_when_birefnet_disagrees(monkeypatch):
+    # SAM2's own mask covers the whole 8x8 crop; BiRefNet's alpha for the same crop covers a tiny,
+    # almost entirely non-overlapping corner - low agreement, so the composited layer must use
+    # SAM2's mask (fully opaque), not BiRefNet's (mostly empty)
+    mask = _square_alpha(20, 20, 2, 10, 2, 10)
+    disagreeing_matte = np.zeros((8, 8), dtype=np.uint8)
+    disagreeing_matte[0:2, 0:2] = 255
+
+    monkeypatch.setattr(layer_separation_module.layer_naming, "list_candidate_objects", lambda image, timeout=None: ["mug"])
+    monkeypatch.setattr(
+        layer_separation_module.object_detect,
+        "detect_objects",
+        lambda image, text_prompt, timeout=None: [_detection("mug", [2, 2, 10, 10])],
+    )
+    monkeypatch.setattr(layer_separation_module.object_segment, "segment_boxes", lambda image, boxes, timeout=None: [mask])
+    monkeypatch.setattr(layer_separation_module.instance_matte, "matte_crops", lambda crops, timeout=None: [disagreeing_matte])
+    monkeypatch.setattr(
+        layer_separation_module.background_inpaint, "inpaint_background", lambda source_image, mask, timeout=None: source_image
+    )
+
+    result = separate_layers(_source_image(20, 20))
+
+    assert result.separation_path == "per-instance"
+    alpha = result.layers[0].image.array[..., 3]
+    # the full 8x8 crop reads opaque (SAM2's mask), not just the tiny corner BiRefNet proposed
+    assert (alpha[2:10, 2:10] > 0).all()
+
+
+def test_separate_layers_per_instance_survives_a_raising_matte_call(monkeypatch):
+    mask = _square_alpha(20, 20, 2, 10, 2, 10)
+
+    monkeypatch.setattr(layer_separation_module.layer_naming, "list_candidate_objects", lambda image, timeout=None: ["mug"])
+    monkeypatch.setattr(
+        layer_separation_module.object_detect,
+        "detect_objects",
+        lambda image, text_prompt, timeout=None: [_detection("mug", [2, 2, 10, 10])],
+    )
+    monkeypatch.setattr(layer_separation_module.object_segment, "segment_boxes", lambda image, boxes, timeout=None: [mask])
+
+    def failing_matte(crops):
+        raise RuntimeError("endpoint down")
+
+    monkeypatch.setattr(layer_separation_module.instance_matte, "matte_crops", failing_matte)
+    monkeypatch.setattr(
+        layer_separation_module.background_inpaint, "inpaint_background", lambda source_image, mask, timeout=None: source_image
+    )
+
+    result = separate_layers(_source_image(20, 20))  # must not raise, must not silently fall back to Qwen
+
+    assert result.separation_path == "per-instance"
+    assert len(result.layers) == 1
+    assert result.layers[0].bbox == (2, 2, 10, 10)
+
+
+def test_separate_layers_leaves_an_honest_hole_at_an_occlusion_boundary(monkeypatch):
+    # box A and box B overlap in columns [8, 12) - a real SAM2 mask for each instance already
+    # excludes the part covered by the OTHER instance (that's what makes it a mask of a real,
+    # partly-occluded object rather than its raw bounding box), simulated directly here rather
+    # than re-deriving it, since this test is about what separate_layers DOES with that mask, not
+    # about SAM2's own occlusion reasoning
+    mask_a = _square_alpha(20, 20, 2, 12, 2, 8)  # pitcher: visible region only, stops before the overlap
+    mask_b = _square_alpha(20, 20, 2, 12, 8, 18)  # orange: covers the overlap - it's in front
+
+    monkeypatch.setattr(
+        layer_separation_module.layer_naming, "list_candidate_objects", lambda image, timeout=None: ["pitcher", "orange"]
+    )
+    monkeypatch.setattr(
+        layer_separation_module.object_detect,
+        "detect_objects",
+        lambda image, text_prompt, timeout=None: [_detection("pitcher", [2, 2, 12, 12]), _detection("orange", [8, 2, 18, 12])],
+    )
+    monkeypatch.setattr(layer_separation_module.object_segment, "segment_boxes", lambda image, boxes, timeout=None: [mask_a, mask_b])
+    monkeypatch.setattr(
+        layer_separation_module.instance_matte,
+        "matte_crops",
+        lambda crops, timeout=None: [np.full(crop.shape[:2], 255, dtype=np.uint8) for crop in crops],
+    )
+    monkeypatch.setattr(
+        layer_separation_module.background_inpaint, "inpaint_background", lambda source_image, mask, timeout=None: source_image
+    )
+
+    result = separate_layers(_source_image(20, 20))
+
+    pitcher = next(layer for layer in result.layers if layer.suggested_name == "pitcher")
+    orange = next(layer for layer in result.layers if layer.suggested_name == "orange")
+    pitcher_alpha = pitcher.image.array[..., 3]
+    orange_alpha = orange.image.array[..., 3]
+
+    # the occluded column (x=9, inside the overlap) is honestly empty on the pitcher's own layer -
+    # nothing reconstructs what's hidden behind the orange - while the orange itself is opaque there
+    assert (pitcher_alpha[2:12, 9] == 0).all()
+    assert (orange_alpha[2:12, 9] > 0).all()
+
+
+def test_separate_layers_background_inpaint_receives_the_union_of_instance_masks(monkeypatch):
+    mask_a = _square_alpha(20, 20, 2, 10, 2, 10)
+    mask_b = _square_alpha(20, 20, 2, 10, 12, 18)
+    captured = {}
+
+    def fake_inpaint(source_image, mask, timeout=None):
+        captured["mask"] = mask
+        return source_image
+
+    monkeypatch.setattr(
+        layer_separation_module.layer_naming, "list_candidate_objects", lambda image, timeout=None: ["pitcher", "orange"]
+    )
+    monkeypatch.setattr(
+        layer_separation_module.object_detect,
+        "detect_objects",
+        lambda image, text_prompt, timeout=None: [_detection("pitcher", [2, 2, 10, 10]), _detection("orange", [12, 2, 18, 10])],
+    )
+    monkeypatch.setattr(layer_separation_module.object_segment, "segment_boxes", lambda image, boxes, timeout=None: [mask_a, mask_b])
+    monkeypatch.setattr(
+        layer_separation_module.instance_matte,
+        "matte_crops",
+        lambda crops, timeout=None: [np.full(crop.shape[:2], 255, dtype=np.uint8) for crop in crops],
+    )
+    monkeypatch.setattr(layer_separation_module.background_inpaint, "inpaint_background", fake_inpaint)
+
+    separate_layers(_source_image(20, 20))
+
+    expected_union = np.maximum(mask_a, mask_b)
+    assert np.array_equal(captured["mask"], expected_union)

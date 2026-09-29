@@ -311,6 +311,7 @@ async def api_layer_separation(image: UploadFile = File(...)):
             "background_id": background_id,
             "layer_count": len(result.layers),
             "requested_layers": result.requested_layers,
+            "separation_path": result.separation_path,
             "layers": layers_payload,
         }
     )

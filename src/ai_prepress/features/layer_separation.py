@@ -1,5 +1,43 @@
 """Layer separation: photo -> per-object RGBA layers + a reconstructed background plate.
 
+THE PRIMARY PATH (Phase B, this session) is per-instance: ai_prepress.layer_naming lists candidate
+object names for the whole photo -> ai_prepress.object_detect (Grounding DINO) turns those names
+into real per-object boxes -> ai_prepress.object_segment (box-prompted SAM2) turns each box into a
+pixel-accurate mask -> ai_prepress.instance_matte (BiRefNet_HR) re-mattes each mask's own bbox crop
+for a real high-resolution alpha -> ai_prepress.background_inpaint (LaMa) fills the union of every
+instance mask to reconstruct the plate. See _separate_layers_per_instance for the full pipeline and
+_mask_iou's call site for the one real failure mode found while building it (BiRefNet matting the
+WRONG object inside an overlapping crop).
+
+Composition decision with the older Qwen-Image-Layered path below (explicit, asked for by this
+session's own spec, not left implicit): the per-instance pipeline is ALWAYS TRIED FIRST, and
+Qwen-Image-Layered runs only as a FALLBACK when the per-instance result comes back implausible - no
+candidate objects, no surviving detections, or every detected instance failing to segment/matte
+into anything usable (see separate_layers() below for where that fallback actually happens). Reasons
+this and not "run both, pick a winner" or "replace Qwen outright":
+- Cost/latency is wildly asymmetric. The per-instance pipeline is four fast synchronous Modal
+  calls, each well inside a 150s web-endpoint ceiling. Qwen-Image-Layered is a genuinely
+  multi-minute diffusion call behind its own submit/poll split (see layer_decompose.py's own
+  docstring for why). Running both on every request to "pick a winner" would pay Qwen's full cost
+  on every photo, including the vast majority where the cheap path already works - indefensible
+  given the cost gap.
+- Discrete real-world objects (the common prepress case: products, people, furniture) are exactly
+  what an open-vocabulary detector is built for, and the per-instance path gives crisper masks and
+  HONEST OCCLUSION HOLES (an occluded layer's alpha is just 0 wherever another instance's own mask
+  covers it - nothing reconstructs hidden content, because nothing in this path is asked to) where
+  Qwen's holistic diffusion decomposition tends to hallucinate plausible-looking-but-wrong content
+  instead. That's a real quality win for the common case, not just a cost one.
+- A flat graphic, poster, or other photo with no clear discrete objects is exactly where Grounding
+  DINO has nothing to latch onto - zero (or near-zero) real detections - and Qwen's holistic
+  decomposition is a genuinely better fit there. Falling back lazily, only when the cheap path
+  actually comes up empty, gets that photo the right treatment without ever paying Qwen's cost on
+  a photo the cheap path already handled well.
+
+Everything below this point that isn't part of the new pipeline - Qwen-Image-Layered itself, its
+automatic layer-count estimate, its automatic naming pass, its contamination-detection and
+recursive-repair passes - stays exactly as Phase A shipped it, now serving the fallback path
+instead of the primary one. None of that logic changed; only which path calls it first did.
+
 Orchestrates ai_prepress.layer_decompose (the remote Qwen-Image-Layered client) - this is the
 first features/ module that calls a remote model directly, since face_parsing.py's Modal
 precedent was historically wired straight into api/main.py and is now retired from the UI (see
@@ -55,7 +93,15 @@ import cv2
 import numpy as np
 from PIL import ImageCms
 
-from ai_prepress import layer_decompose, layer_naming, object_count
+from ai_prepress import (
+    background_inpaint,
+    instance_matte,
+    layer_decompose,
+    layer_naming,
+    object_count,
+    object_detect,
+    object_segment,
+)
 from ai_prepress.io import LoadedImage, from_unit_float, to_unit_float
 
 MIN_LAYERS = 2
@@ -101,7 +147,12 @@ class SeparatedLayers:
     layers: list[SeparatedLayer]
     requested_layers: int  # the actual N sent to the model - not len(layers)+1, which is what
     # came BACK; surfaced for transparency while MIN_LAYERS/MAX_LAYERS/the count formula still
-    # need tuning against real photos, see _estimate_layer_count
+    # need tuning against real photos, see _estimate_layer_count. In the per-instance path this is
+    # the deduped detection count instead - the closest equivalent "how many objects this path
+    # expected to separate," with len(layers) still possibly smaller if one of them failed to
+    # segment or matte into anything usable
+    separation_path: str  # "per-instance" or "qwen" - which pipeline actually produced this
+    # result, see the module docstring's composition decision and separate_layers() below
 
 
 BBOX_ALPHA_THRESHOLD = 127  # majority-opaque, not "any nonzero" - see below. Not underscore-
@@ -310,10 +361,11 @@ def _repair_contaminated_layer(
     return repaired
 
 
-def separate_layers(image: LoadedImage, endpoint: str | None = None) -> SeparatedLayers:
-    """Returns every remote-detected layer as a full-precision RGBA LoadedImage, plus the
-    background plate. Never returns None - unlike retouch_faces' "no face found" case, a photo
-    with nothing separable just comes back with an empty `layers` list, still a valid result."""
+def _separate_layers_qwen(image: LoadedImage, endpoint: str | None = None) -> SeparatedLayers:
+    """The FALLBACK path - see module docstring for the composition decision. Returns every
+    remote-detected layer as a full-precision RGBA LoadedImage, plus the background plate. Never
+    returns None - unlike retouch_faces' "no face found" case, a photo with nothing separable just
+    comes back with an empty `layers` list, still a valid result."""
     layers_requested = _estimate_layer_count(image)
     decomposed = layer_decompose.decompose_layers(image, endpoint=endpoint, layers=layers_requested)
 
@@ -364,4 +416,202 @@ def separate_layers(image: LoadedImage, endpoint: str | None = None) -> Separate
     layers = repaired_layers
 
     background = LoadedImage(array=decomposed.background, icc_profile=icc_profile, bit_depth=8)
-    return SeparatedLayers(background=background, layers=layers, requested_layers=layers_requested)
+    return SeparatedLayers(
+        background=background, layers=layers, requested_layers=layers_requested, separation_path="qwen"
+    )
+
+
+# --- per-instance pipeline (PRIMARY path) -------------------------------------------------------
+
+
+PER_INSTANCE_CLIENT_TIMEOUT = 120.0  # every new client's own default (60-120s) times the Modal
+# request itself, not a cold container spin-up on top of it - confirmed against a real deploy: a
+# request made ~10 minutes after the previous one hit object_detect's scaledown_window=120s (see
+# deploy/object_detect.py), the container had scaled down, and its default 60s client timeout was
+# too tight for a genuine cold start, silently falling this whole path back to Qwen. A generous
+# shared timeout here costs nothing on the (common) warm-container case and buys real headroom on
+# the (real, seen) cold one - cheaper than debugging a silent fallback again.
+
+MATTE_SAM_IOU_THRESHOLD = 0.5  # first-cut guard, not yet measured against a real BiRefNet/SAM2
+# disagreement the way FALLBACK_LAYER_COUNT eventually was (same honest-placeholder spirit as
+# COLOR_HISTOGRAM_SIMILARITY_THRESHOLD above). Exists for a real failure mode found while building
+# this: BiRefNet_HR mattes WHATEVER salient object is in the crop it's given, with no idea which
+# instance the crop was meant for - two overlapping detection boxes (a book box that also contains
+# part of an orange, say) can come back with BiRefNet confidently matting the WRONG object. Low
+# agreement between BiRefNet's own alpha and the SAM2 mask that produced the crop in the first
+# place is the signal that happened - falls back to the correctly-scoped (if harder-edged) SAM2
+# mask rather than shipping a confidently-wrong alpha.
+
+DETECTION_DEDUP_IOU_THRESHOLD = 0.6  # same honest-placeholder spirit - Grounding DINO applies no
+# NMS across DIFFERENT text terms describing the same real object (confirmed directly against a
+# real deploy: the candidate-name listing call can propose close synonyms like "book" and "brown
+# book" for one physical book), so this project's own client does that suppression instead of
+# trusting the model's per-term boxes to already be deduplicated
+
+
+def _box_area(box: list[float]) -> float:
+    x0, y0, x1, y1 = box
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+
+def _box_iou(a: list[float], b: list[float]) -> float:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    intersection = max(0.0, ix1 - ix0) * max(0.0, iy1 - iy0)
+    union = _box_area(a) + _box_area(b) - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _dedupe_detections(detections: list[dict], iou_threshold: float = DETECTION_DEDUP_IOU_THRESHOLD) -> list[dict]:
+    """Greedy NMS across ALL detections regardless of label text - see DETECTION_DEDUP_IOU_THRESHOLD
+    for why label-agnostic matters here. Highest-score box of a duplicate pair wins."""
+    ordered = sorted(detections, key=lambda d: d["score"], reverse=True)
+    kept: list[dict] = []
+    for candidate in ordered:
+        if not any(_box_iou(candidate["box"], other["box"]) >= iou_threshold for other in kept):
+            kept.append(candidate)
+    return kept
+
+
+def _mask_iou(a: np.ndarray, b: np.ndarray) -> float:
+    if a.shape != b.shape:
+        return 0.0  # a genuine shape mismatch is itself disagreement - never crash comparing them
+    a_bin = a > BBOX_ALPHA_THRESHOLD
+    b_bin = b > BBOX_ALPHA_THRESHOLD
+    union = np.logical_or(a_bin, b_bin).sum()
+    if union == 0:
+        return 0.0
+    return float(np.logical_and(a_bin, b_bin).sum()) / float(union)
+
+
+def _build_detection_prompt(names: list[str]) -> str:
+    return ". ".join(name.strip().rstrip(".") for name in names if name.strip()) + "."
+
+
+def _separate_layers_per_instance(image: LoadedImage) -> SeparatedLayers | None:
+    """The PRIMARY path - see module docstring for the full pipeline shape and the composition
+    decision. Returns None whenever the result would be implausible (no candidate objects, no
+    surviving detections, or every detected instance failing to segment/matte into anything
+    usable) - the caller (separate_layers, below) falls back to Qwen-Image-Layered in that case,
+    never raises past this function for a "nothing here" outcome that isn't a real error.
+
+    Occlusion is handled by omission, not reconstruction: nothing in this pipeline is ever asked
+    to guess what's under another object, so an occluded instance's own mask (and therefore its
+    final alpha) is just 0 wherever another instance's mask already covers that pixel - an honest
+    hole, not fabricated content. This is the documented, correct behavior this session's own
+    research called for, not a gap to close later.
+    """
+    try:
+        candidate_names = layer_naming.list_candidate_objects(image, timeout=PER_INSTANCE_CLIENT_TIMEOUT)
+    except Exception:
+        return None
+    if not candidate_names:
+        return None
+
+    try:
+        detections = object_detect.detect_objects(
+            image, _build_detection_prompt(candidate_names), timeout=PER_INSTANCE_CLIENT_TIMEOUT
+        )
+    except Exception:
+        return None
+    detections = _dedupe_detections(detections)
+    if not detections:
+        return None
+
+    try:
+        masks = object_segment.segment_boxes(
+            image, [d["box"] for d in detections], timeout=PER_INSTANCE_CLIENT_TIMEOUT
+        )
+    except Exception:
+        return None
+
+    icc_profile = image.icc_profile
+    if icc_profile is None:
+        icc_profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+
+    source_rgb = image.array[..., :3]
+    source_rgb_unit = to_unit_float(source_rgb)
+    source_rgb_uint8 = from_unit_float(source_rgb_unit, np.uint8)
+    height, width = source_rgb.shape[:2]
+
+    instance_bboxes = [_bbox_from_alpha(mask) for mask in masks]
+    crops: list[np.ndarray] = []
+    crop_source_indices: list[int] = []
+    for i, bbox in enumerate(instance_bboxes):
+        x0, y0, x1, y1 = bbox
+        if x1 <= x0 or y1 <= y0:
+            continue  # SAM2 came back with nothing usable for this box - drop the instance rather
+            # than fail the whole request over one bad detection
+        crops.append(source_rgb_uint8[y0:y1, x0:x1])
+        crop_source_indices.append(i)
+
+    if not crops:
+        return None
+
+    try:
+        matte_alphas: list[np.ndarray | None] = list(
+            instance_matte.matte_crops(crops, timeout=PER_INSTANCE_CLIENT_TIMEOUT)
+        )
+    except Exception:
+        # matting is this path's own quality pass over an already-real SAM2 mask, not a hard
+        # dependency of it - see MATTE_SAM_IOU_THRESHOLD's fallback below for the same reasoning
+        # applied per-instance, not just on a total endpoint failure
+        matte_alphas = [None] * len(crops)
+
+    layers: list[SeparatedLayer] = []
+    for crop_index, source_index in enumerate(crop_source_indices):
+        x0, y0, x1, y1 = instance_bboxes[source_index]
+        sam_alpha_crop = masks[source_index][y0:y1, x0:x1]
+        matte_alpha_crop = matte_alphas[crop_index]
+
+        if matte_alpha_crop is not None and _mask_iou(matte_alpha_crop, sam_alpha_crop) >= MATTE_SAM_IOU_THRESHOLD:
+            chosen_alpha_crop = matte_alpha_crop
+        else:
+            chosen_alpha_crop = sam_alpha_crop
+
+        full_alpha = np.zeros((height, width), dtype=np.uint8)
+        full_alpha[y0:y1, x0:x1] = chosen_alpha_crop
+        layer = _composite_layer(
+            full_alpha, source_rgb, source_rgb_unit, image.array.dtype, icc_profile, image.bit_depth
+        )
+        layer.suggested_name = detections[source_index]["label"]
+        layers.append(layer)
+
+    layers = [layer for layer in layers if layer.bbox != (0, 0, 0, 0)]
+    if not layers:
+        return None  # every detected instance failed to segment/matte into anything usable
+
+    union_mask = np.zeros((height, width), dtype=np.uint8)
+    for mask in masks:
+        union_mask = np.maximum(union_mask, mask)
+
+    try:
+        background_rgb = background_inpaint.inpaint_background(
+            source_rgb_uint8, union_mask, timeout=PER_INSTANCE_CLIENT_TIMEOUT
+        )
+    except Exception:
+        # inpainting is an enhancement over the raw (holed) plate, never a hard dependency of an
+        # otherwise-successful separation - matches object_count/layer_naming's own fallback
+        # discipline elsewhere in this file
+        background_rgb = source_rgb_uint8
+
+    background = LoadedImage(array=background_rgb, icc_profile=icc_profile, bit_depth=8)
+    return SeparatedLayers(
+        background=background, layers=layers, requested_layers=len(detections), separation_path="per-instance"
+    )
+
+
+def separate_layers(image: LoadedImage, endpoint: str | None = None) -> SeparatedLayers:
+    """Photo -> per-object RGBA layers + a reconstructed background plate.
+
+    Tries the per-instance pipeline FIRST and falls back to Qwen-Image-Layered only when that
+    comes back implausible - see the module docstring for the full reasoning behind this order.
+    `endpoint` only ever overrides the Qwen-Image-Layered endpoint (the fallback path); the
+    per-instance clients each resolve their own endpoint from their own env var, same as
+    object_count/layer_naming already do elsewhere in this file."""
+    per_instance = _separate_layers_per_instance(image)
+    if per_instance is not None:
+        return per_instance
+    return _separate_layers_qwen(image, endpoint=endpoint)
