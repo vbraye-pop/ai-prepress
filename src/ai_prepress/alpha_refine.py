@@ -16,6 +16,23 @@ person's leg for the chair layer to align to, only the person's own edge - so fi
 frame unscoped would pull an occluded layer's alpha toward a wrong boundary and make bleed worse,
 not better. `visible_region` scopes refinement to where a layer is actually known to have content;
 outside it, the coarse alpha passes through untouched.
+
+NOT currently wired into features/layer_separation.py - see that module's own docstring for why.
+The "calibrate against live model output" flag above got acted on: refine_alpha() was run against
+the real coarse alpha this module's own 13px measurement came from (same portrait.png hair edge),
+at DEFAULT_RADIUS/DEFAULT_EPS and a full sweep around them (radius 2-64, eps 1e-4 to 1e-1, plus a
+trimap-style band limiting the filter to a narrow region around the coarse edge instead of the
+whole visible_region). A plain 10%-90%-crossing measurement got WORSE at every setting that
+changed the alpha by more than a rounding error. Row-level inspection of the refined output shows
+why: real hair texture in the guide RGB reads as edge signal throughout what should be a flat
+opaque interior (the alpha oscillates there instead of holding steady near 255), not only at the
+true boundary - a boundary-crossing metric reads that as a much wider transition, whether or not
+the true edge itself got sharper. Either way, no radius/eps combination was found that both
+changed the coarse alpha meaningfully and held up under that measurement, so there's nothing left
+to justify shipping it on. The 21px-to-~1px synthetic result above still holds for a clean
+idealized edge; it just doesn't generalize to a real photographic one the way this module hoped. A
+future fix needs a different approach (e.g. limiting the guide to gradient magnitude rather than
+raw RGB, or matting-style trimap estimation), not a parameter retune.
 """
 
 from __future__ import annotations

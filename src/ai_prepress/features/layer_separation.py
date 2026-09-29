@@ -12,18 +12,29 @@ higher-fidelity source already exists for every non-occluded layer pixel). Only 
 plate is genuinely novel content - reconstructed pixels with no source data behind them - so it
 stays honestly 8-bit, a documented exception rather than an implicit gap.
 
-Three more passes sit around the main decomposition call, all explicitly ENHANCEMENTS over a
-working fallback, never hard dependencies of it - a bad day for any one of them must never take
-down the core separation result:
+Two more passes sit around the main decomposition call, both explicitly ENHANCEMENTS over a
+working fallback, never hard dependencies of it - a bad day for either one must never take down
+the core separation result:
 - ai_prepress.object_count (SAM2) estimates how many distinct objects are in the photo BEFORE
   decomposing, so `layers` is sized per-photo instead of a fixed constant. If it fails for any
   reason, falls back to FALLBACK_LAYER_COUNT (today's old hardcoded default).
 - ai_prepress.layer_naming (InternVL3.5-2B) suggests a short label per layer AFTER decomposing,
   to pre-fill the UI's rename field. If it fails for any reason, every layer's `suggested_name`
   is just None and the UI falls back to its existing generic "Layer N" placeholder.
-- ai_prepress.alpha_refine (guided filter) sharpens every layer's coarse, Lanczos-soft alpha
-  against the source RGB's own real edges, scoped to that layer's own coverage region so it never
-  reaches across an occlusion boundary. A refinement failure just ships the coarser alpha.
+
+ai_prepress.alpha_refine (guided filter) exists and is independently tested, but is deliberately
+NOT wired in here. It was briefly wired into _composite_layer and then measured against a real
+Qwen-Image-Layered coarse alpha on an actual hair edge (portrait.png, the guided filter's own
+DEFAULT_RADIUS/DEFAULT_EPS comment had flagged this exact validation as still outstanding): the
+naive 10%-90%-crossing measurement got WORSE at every (radius, eps) combination tried, including
+the shipped defaults and a trimap-style band limiting the filter to a narrow region around the
+coarse edge (median 14px unrefined vs. 27px best-case refined, 148px worst-case). Row-level
+inspection shows this isn't a wider true edge - it's real hair texture in the guide RGB reading as
+edge signal throughout what should be a flat opaque interior, which a boundary-crossing metric
+reads as a much wider transition than what actually changed. Either way, no setting was found that
+both changed the coarse alpha meaningfully and didn't hurt this measurement, so there's no evidence
+left to justify shipping it. Re-wiring this needs a genuinely different approach (or a different
+real edge case to validate against), not a parameter tweak - see alpha_refine.py's own docstring.
 
 A fourth pass, contamination detection + recursive repair, reuses the naming call above rather
 than adding new remote calls of its own for detection: two spatially adjacent layers whose
@@ -44,7 +55,7 @@ import cv2
 import numpy as np
 from PIL import ImageCms
 
-from ai_prepress import alpha_refine, layer_decompose, layer_naming, object_count
+from ai_prepress import layer_decompose, layer_naming, object_count
 from ai_prepress.io import LoadedImage, from_unit_float, to_unit_float
 
 MIN_LAYERS = 2
@@ -131,18 +142,10 @@ def _composite_layer(
     icc_profile: bytes,
     bit_depth: int,
 ) -> SeparatedLayer:
-    """Refine the coarse alpha against the source's own real edges before compositing - see
-    ai_prepress.alpha_refine's module docstring for why (Lanczos-upsampled diffusion output is
-    soft by construction, not because the real object edge is). Left unscoped (no explicit
-    visible_region): alpha_refine's own default IS a layer's own coverage region, thresholded and
-    dilated from this same coarse alpha - exactly the scoping this needs, not a placeholder being
-    reused past its intent. Wrapped the same way every other enhancement in this module is: a
-    guided-filter bug or a degenerate tiny crop must not fail an otherwise-working separation, it
-    should just ship the coarser alpha instead."""
-    try:
-        alpha = alpha_refine.refine_alpha(alpha, source_rgb)
-    except Exception:
-        pass
+    """Composite one layer's alpha against the source's own full-precision RGB.
+
+    Does not call ai_prepress.alpha_refine - see this module's own docstring for the real-photo
+    measurement that found it regresses hair-edge sharpness rather than improving it."""
     alpha_unit = to_unit_float(alpha)
     rgba_unit = np.dstack([source_rgb_unit, alpha_unit])
     layer_image = LoadedImage(

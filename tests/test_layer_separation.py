@@ -3,8 +3,6 @@ import pytest
 from PIL import ImageCms
 
 import ai_prepress.features.layer_separation as layer_separation_module
-from ai_prepress.alpha_refine import refine_alpha as _real_refine_alpha  # captured before the
-# autouse fixture below ever gets a chance to stub the module attribute of the same name out
 from ai_prepress.features.layer_separation import separate_layers
 from ai_prepress.io import LoadedImage
 from ai_prepress.layer_decompose import LayerSeparationResult
@@ -35,19 +33,16 @@ def _square_alpha(height, width, y0, y1, x0, x1) -> np.ndarray:
 
 @pytest.fixture(autouse=True)
 def _default_enhancement_mocks(monkeypatch):
-    """object_count and layer_naming are real remote calls, and alpha_refine's guided filter is
-    real local compute that degenerates on tiny fixture-sized arrays (radius=64 on an 8x8 image)
-    - default every test to a working, uninteresting mock for all three so tests that only care
-    about the core compositing/contamination logic don't need to know about any of them. Tests
-    that specifically exercise count/naming/refinement behavior override these within their own
-    body (a later monkeypatch.setattr in the same test wins)."""
+    """object_count and layer_naming are real remote calls - default every test to a working,
+    uninteresting mock for both so tests that only care about the core compositing/contamination
+    logic don't need to know about either. Tests that specifically exercise count/naming behavior
+    override these within their own body (a later monkeypatch.setattr in the same test wins)."""
     monkeypatch.setattr(layer_separation_module.object_count, "count_objects", lambda image: 1)
     monkeypatch.setattr(
         layer_separation_module.layer_naming,
         "name_layers",
         lambda layers: [None] * len(layers),
     )
-    monkeypatch.setattr(layer_separation_module.alpha_refine, "refine_alpha", lambda alpha, source_rgb, **kwargs: alpha)
 
 
 def test_separate_layers_preserves_source_bit_depth_and_rgb_values(monkeypatch):
@@ -211,49 +206,14 @@ def test_separate_layers_suggested_name_is_none_if_naming_fails(monkeypatch):
     assert result.layers[0].suggested_name is None
 
 
-# --- guided-filter alpha refinement -----------------------------------------------------------
-
-
-def test_separate_layers_refines_every_layers_alpha(monkeypatch):
-    # bboxes kept well apart (> NAME_ADJACENCY_TOLERANCE) so the contamination pass has nothing
-    # to flag here - this test is only about refinement getting called, not the contamination path
-    canned = LayerSeparationResult(
-        background=np.full((30, 30, 3), 100, dtype=np.uint8),
-        layer_alphas=[_square_alpha(30, 30, 2, 8, 2, 8), _square_alpha(30, 30, 20, 26, 20, 26)],
-    )
-    monkeypatch.setattr(
-        layer_separation_module.layer_decompose,
-        "decompose_layers",
-        lambda image, endpoint=None, layers=None, prompt=None: canned,
-    )
-    calls = []
-
-    def spy_refine(alpha, source_rgb, **kwargs):
-        calls.append(alpha)
-        return alpha
-
-    monkeypatch.setattr(layer_separation_module.alpha_refine, "refine_alpha", spy_refine)
-
-    separate_layers(_source_image(30, 30))
-    assert len(calls) == 2
-
-
-def test_separate_layers_guided_filter_actually_changes_a_real_blurred_edge(monkeypatch):
-    # the spy-call test above proves the wiring; this proves the wiring isn't calling into a
-    # silently-swallowed-exception no-op (refine_alpha is wrapped in a bare except in
-    # _composite_layer) by using the REAL guided filter on a fixture sized like
-    # test_alpha_refine.py's own (large enough that radius=64 doesn't just degenerate)
-    import cv2
-
-    height, width = 200, 200
-    edge_x = 100
-    source_rgb = np.zeros((height, width, 3), dtype=np.uint16)
-    source_rgb[:, edge_x:] = 65535
-    sharp_alpha = np.zeros((height, width), dtype=np.float32)
-    sharp_alpha[:, edge_x:] = 255
-    coarse_alpha = cv2.GaussianBlur(sharp_alpha, (0, 0), sigmaX=8.0).astype(np.uint8)
-
-    source = LoadedImage(array=source_rgb, icc_profile=_SRGB, bit_depth=16)
+def test_separate_layers_ships_the_coarse_alpha_unmodified(monkeypatch):
+    # locks the decision in layer_separation's own module docstring: alpha_refine measurably
+    # regressed real hair-edge sharpness and is deliberately not called from _composite_layer -
+    # a soft (non-binary) ramp, not a hard-edged square, so a guided filter silently getting
+    # re-wired back in would visibly change these exact values, not just pass/fail on a shape check
+    height, width = 8, 8
+    ramp_alpha = np.linspace(0, 255, width, dtype=np.uint8)
+    coarse_alpha = np.tile(ramp_alpha, (height, 1))
     canned = LayerSeparationResult(
         background=np.full((height, width, 3), 100, dtype=np.uint8), layer_alphas=[coarse_alpha]
     )
@@ -262,27 +222,12 @@ def test_separate_layers_guided_filter_actually_changes_a_real_blurred_edge(monk
         "decompose_layers",
         lambda image, endpoint=None, layers=None, prompt=None: canned,
     )
-    # overrides the autouse identity stub with the real implementation - "a later
-    # monkeypatch.setattr in the same test wins", per the fixture's own docstring
-    monkeypatch.setattr(layer_separation_module.alpha_refine, "refine_alpha", _real_refine_alpha)
 
-    result = separate_layers(source)
-    # the layer's own alpha channel is scaled to the SOURCE dtype's range (uint16 here, see
-    # separate_layers' own bit-depth handling), not a literal 0-255 uint8 - normalize both back to
-    # [0, 1] before comparing transition widths, same convention alpha_refine.py itself uses
-    refined_alpha_unit = result.layers[0].image.array[..., 3].astype(np.float64) / 65535.0
-    coarse_alpha_unit = coarse_alpha.astype(np.float64) / 255.0
+    result = separate_layers(_source_image(height, width))
 
-    def _row_transition_width(row_unit: np.ndarray) -> int:
-        below = np.where(row_unit < 0.1)[0]
-        above = np.where(row_unit > 0.9)[0]
-        if below.size == 0 or above.size == 0:
-            return len(row_unit)
-        return max(int(above.min()) - int(below.max()), 0)
-
-    coarse_width = _row_transition_width(coarse_alpha_unit[100])
-    refined_width = _row_transition_width(refined_alpha_unit[100])
-    assert refined_width < coarse_width
+    alpha_unit = result.layers[0].image.array[..., 3].astype(np.float64) / 65535.0
+    coarse_unit = coarse_alpha.astype(np.float64) / 255.0
+    np.testing.assert_allclose(alpha_unit, coarse_unit, atol=1e-3)
 
 
 # --- contamination detection + recursive repair -----------------------------------------------
