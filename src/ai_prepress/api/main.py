@@ -301,6 +301,7 @@ async def api_layer_separation(image: UploadFile = File(...)):
                 "bbox": layer.bbox,
                 "alpha_coverage": float((layer.image.array[..., 3] > BBOX_ALPHA_THRESHOLD).mean()),
                 "suggested_name": layer.suggested_name,
+                "contamination_flag": layer.contamination_flag,
             }
         )
 
