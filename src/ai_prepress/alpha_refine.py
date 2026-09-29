@@ -26,21 +26,22 @@ import numpy as np
 from ai_prepress.io import to_unit_float
 
 # DEFAULT_RADIUS/DEFAULT_EPS provenance, honestly stated: a synthetic flat two-region step edge
-# (this module's own unit tests) snaps from a 20px transition down to ~1px at these settings - a
+# (this module's own unit tests) snaps from a 21px transition down to ~1px at these settings - a
 # strong, clean result, but on an idealized guide with zero internal texture, which is the easy
-# case for any local-regression filter. A second check this session, against REAL texture (hair/
-# sky patches cropped from portrait.png, same blur-then-refine setup, transition width measured by
-# anchoring to the actual plateau levels rather than the row's raw min/max - the naive min/max
-# version falsely reads texture noise far from the edge as part of the transition and was caught
-# giving nonsense widths during that check), found these settings roughly edge-neutral on real
-# texture - not the dramatic win the synthetic case shows, but not the regression a badly-chosen
-# eps causes either (eps an order of magnitude smaller or larger than 5e-3 at this radius blew the
-# real-texture transition out past 100px in that same check - the interior-window variance either
-# vanishes or gets swamped by texture noise, and the box-filtered a/b coefficients stop being a
-# sensible fit). Net: verified safe-and-neutral-to-mildly-positive on one real photo region, not
-# verified as a real improvement on real model output - that needs an actual Qwen-Image-Layered
-# coarse alpha to test against, which this module's own test suite deliberately doesn't call Modal
-# for. Flagged here for whoever wires this in to calibrate against live output before trusting it.
+# case for any local-regression filter. A second check this session built a real-texture guide
+# instead (hair/sky patches cropped from portrait.png, same blur-then-refine setup, transition
+# width measured by anchoring to the actual plateau levels rather than the row's raw min/max - the
+# naive min/max version falsely reads texture noise far from the edge as part of the transition
+# and was caught giving nonsense widths during that check). But the two crops were spliced into a
+# synthetic butt-join, not a real photographic boundary, so its result (21px to 20.5px, no
+# measurable change) is weak evidence, not a second confirmation - a genuine real-edge validation
+# still needs an actual Qwen-Image-Layered coarse alpha, which this module's test suite
+# deliberately doesn't call Modal for. What that check DOES support, more robustly: eps an order of
+# magnitude smaller or larger than 5e-3 at this radius blew the same real-texture transition out
+# past 100px, a large and repeatable failure mode (near-zero window variance or texture-swamped
+# variance makes the box-filtered a/b coefficients a bad local fit) worth avoiding regardless of
+# how the neutral-case number holds up. Flagged here for whoever wires this in: calibrate against
+# live model output before trusting these defaults on a real photo.
 DEFAULT_RADIUS = 64
 DEFAULT_EPS = 5e-3  # in [0, 1]-normalized intensity units, matching guidedFilter's own convention
 # the coarse alpha's own default stand-in for a real visible-region mask: low enough to keep the
