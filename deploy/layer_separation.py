@@ -51,6 +51,21 @@ same layers=4, only the bucket changed:
 
 1024 was rejected on all three axes measured, not just latency.
 
+`prompt` (optional, threaded through submit -> decompose.spawn -> the pipeline call, same shape
+as `layers`) is the pipeline's own positive-caption override, paired with the always-present
+`negative_prompt` in diffusers' usual convention. Confirmed against the model's own README
+(github.com/QwenLM/Qwen-Image-Layered), not guessed: "The text prompt is intended to describe the
+overall content of the input image - including elements that may be partially occluded", and the
+README documents recursive decomposition as a real, supported capability ("any layer can itself be
+further decomposed, enabling infinite decomposition") with no code example of its own - this file's
+`prompt` plumbing plus features/layer_separation.py's recursive repair pass on a flagged layer are
+what actually exercise it. Left out of the pipeline call entirely when not given, so the
+unprompted path's automatic captioning (`use_en_prompt`) is unchanged from before this existed.
+Never sent alongside a transparent (RGBA) input image - the model's own GitHub issue #17 asks how
+alpha-channel input is handled and has had no answer for months, so this project treats it as
+unsupported rather than assumed to work, and always flattens to opaque RGB first (see
+features/layer_separation.py's repair path).
+
 Deploy: uv run --group deploy modal deploy deploy/layer_separation.py
 
 torch/diffusers/PIL are only ever imported inside method bodies below, never at module level -
@@ -117,7 +132,7 @@ class LayerDecomposer:
         self.pipeline.set_progress_bar_config(disable=True)
 
     @modal.method()
-    def decompose(self, image_bytes: bytes, layers: int = DEFAULT_LAYER_COUNT) -> bytes:
+    def decompose(self, image_bytes: bytes, layers: int = DEFAULT_LAYER_COUNT, prompt: str | None = None) -> bytes:
         """Not a web endpoint - called via .spawn() from the submit handler below, so it isn't
         subject to Modal web functions' 150-second HTTP request ceiling (this class's own
         `timeout=600` applies instead). Returns a zip: background.png (RGB, 8-bit, layer 0's own
@@ -135,19 +150,22 @@ class LayerDecomposer:
         target_size = source.size
 
         generator = torch.Generator(device="cuda").manual_seed(777)
+        pipeline_kwargs = dict(
+            image=source,
+            generator=generator,
+            true_cfg_scale=4.0,
+            negative_prompt=" ",
+            num_inference_steps=50,
+            num_images_per_prompt=1,
+            layers=layers,
+            resolution=RESOLUTION_BUCKET,
+            cfg_normalize=True,
+            use_en_prompt=True,
+        )
+        if prompt is not None:
+            pipeline_kwargs["prompt"] = prompt
         with torch.inference_mode():
-            output = self.pipeline(
-                image=source,
-                generator=generator,
-                true_cfg_scale=4.0,
-                negative_prompt=" ",
-                num_inference_steps=50,
-                num_images_per_prompt=1,
-                layers=layers,
-                resolution=RESOLUTION_BUCKET,
-                cfg_normalize=True,
-                use_en_prompt=True,
-            )
+            output = self.pipeline(**pipeline_kwargs)
         output_layers = output.images[0]  # bottom-to-top order, see module docstring
 
         background_rgba = output_layers[0].resize(target_size, Image.LANCZOS)
@@ -185,7 +203,11 @@ def web():
     web_app = FastAPI()
 
     @web_app.post("/submit")
-    async def submit(file: UploadFile = File(...), layers: int = Form(DEFAULT_LAYER_COUNT)) -> Response:
+    async def submit(
+        file: UploadFile = File(...),
+        layers: int = Form(DEFAULT_LAYER_COUNT),
+        prompt: str | None = Form(None),
+    ) -> Response:
         contents = await file.read()
         # a plain in-module `LayerDecomposer().decompose.spawn(...)` fails here with
         # `AttributeError: 'function' object has no attribute 'spawn'` - discovered against a
@@ -193,7 +215,7 @@ def web():
         # inside another already-running container of the same app needs an explicit lookup by
         # name (the same mechanism cross-app calls use), not direct instantiation.
         decomposer_cls = modal.Cls.from_name("ai-prepress-layer-separation", "LayerDecomposer")
-        call = decomposer_cls().decompose.spawn(contents, layers=layers)
+        call = decomposer_cls().decompose.spawn(contents, layers=layers, prompt=prompt)
         return JSONResponse({"call_id": call.object_id})
 
     @web_app.get("/result")

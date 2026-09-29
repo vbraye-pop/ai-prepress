@@ -65,6 +65,49 @@ def test_decompose_layers_passes_layers_through_when_given(monkeypatch):
     assert captured["data"] == {"layers": 6}
 
 
+def test_decompose_layers_passes_prompt_through_when_given(monkeypatch):
+    captured = {}
+
+    def fake_post(url, files, data, timeout):
+        captured["data"] = data
+        return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
+
+    def fake_get(url, params, timeout):
+        return _fake_response(200, content=_zip_bytes(4, 4, 0), url=url)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    decompose_layers(
+        _test_image(),
+        endpoint="https://example.invalid",
+        poll_interval=0,
+        layers=3,
+        prompt="the jeans, including any parts hidden by another object",
+    )
+    assert captured["data"] == {
+        "layers": 3,
+        "prompt": "the jeans, including any parts hidden by another object",
+    }
+
+
+def test_decompose_layers_omits_prompt_when_not_given(monkeypatch):
+    captured = {}
+
+    def fake_post(url, files, data, timeout):
+        captured["data"] = data
+        return _fake_response(200, json_body={"call_id": "abc123"}, url=url)
+
+    def fake_get(url, params, timeout):
+        return _fake_response(200, content=_zip_bytes(4, 4, 0), url=url)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    decompose_layers(_test_image(), endpoint="https://example.invalid", poll_interval=0)
+    assert captured["data"] == {}
+
+
 def test_decompose_layers_omits_layers_when_not_given(monkeypatch):
     captured = {}
 

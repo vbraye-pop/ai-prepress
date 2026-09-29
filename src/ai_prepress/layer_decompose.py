@@ -39,11 +39,17 @@ def decompose_layers(
     timeout: float = 600.0,
     poll_interval: float = 2.0,
     layers: int | None = None,
+    prompt: str | None = None,
 ) -> LayerSeparationResult:
     """`layers=None` leaves the decision to the server's own DEFAULT_LAYER_COUNT - callers that
     want the real per-photo count (features.layer_separation, via object_count) pass it
     explicitly. Kept optional, not required, so this function stays usable standalone (direct
-    calls, tests) without needing a whole object-counting pipeline first."""
+    calls, tests) without needing a whole object-counting pipeline first.
+
+    `prompt=None` leaves the server's own automatic captioning in charge, same as omitting
+    `layers`. A caller passes one only to steer the model's documented occlusion-content
+    reconstruction toward a specific object (see features.layer_separation's recursive repair
+    path, the only caller that sets this today)."""
     endpoint = endpoint or os.environ.get("AI_PREPRESS_LAYER_SEPARATION_URL", "")
     if not endpoint:
         raise ValueError(
@@ -57,7 +63,11 @@ def decompose_layers(
     request_buffer = io.BytesIO()
     Image.fromarray(rgb_8bit).save(request_buffer, format="PNG")
 
-    submit_data = {"layers": layers} if layers is not None else {}
+    submit_data: dict[str, int | str] = {}
+    if layers is not None:
+        submit_data["layers"] = layers
+    if prompt is not None:
+        submit_data["prompt"] = prompt
     submit_response = httpx.post(
         f"{endpoint}/submit",
         files={"file": ("image.png", request_buffer.getvalue(), "image/png")},
