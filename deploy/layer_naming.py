@@ -23,6 +23,13 @@ Two real integration details, confirmed from the model card's own reference code
    phrasing below is authored for this project, not copied from documentation, and should be
    treated as a first cut to tune against real output, not a settled prompt.
 
+`prompt` and `max_new_tokens` are optional form fields, defaulted to today's per-crop labeling
+values - the per-instance separation pipeline (features/layer_separation.py) reuses this same
+endpoint before any layers exist yet, to ask InternVL to list every distinct object in the WHOLE
+photo (a longer answer than a one-crop label needs, hence the separate max_new_tokens override) -
+see ai_prepress/layer_naming.py's list_candidate_objects for that prompt's actual text. Every
+existing caller that doesn't pass either field gets byte-identical behavior to before.
+
 Deploy: uv run --group deploy modal deploy deploy/layer_naming.py
 
 Fast enough (2.3B params, ~4.6GB weights in bf16, small single-object crops named one at a time -
@@ -43,7 +50,7 @@ level - same reasoning as every other deploy script in this project.
 import io
 
 import modal
-from fastapi import File, Response, UploadFile
+from fastapi import File, Form, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 MODEL_ID = "OpenGVLab/InternVL3_5-2B"
@@ -167,7 +174,9 @@ def _load_pixel_values(pil_image, input_size=448, max_num=12):
 
 @app.function(image=image, gpu="T4", scaledown_window=300)
 @modal.fastapi_endpoint(method="POST")
-async def name(files: list[UploadFile] = File(...)) -> Response:
+async def name(
+    files: list[UploadFile] = File(...), prompt: str = Form(PROMPT), max_new_tokens: int = Form(16)
+) -> Response:
     import torch
     from PIL import Image
     from transformers import AutoModel, AutoTokenizer
@@ -177,7 +186,7 @@ async def name(files: list[UploadFile] = File(...)) -> Response:
     ).eval().cuda()
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True, use_fast=False)
 
-    generation_config = {"max_new_tokens": 16, "do_sample": False}
+    generation_config = {"max_new_tokens": max_new_tokens, "do_sample": False}
 
     # One image (and its own dynamic_preprocess tiles) per batch_chat call, not the whole
     # request concatenated into one - a real deployed 6-layer request confirmed this GPU OOMs on
@@ -196,7 +205,7 @@ async def name(files: list[UploadFile] = File(...)) -> Response:
         pixel_values = _load_pixel_values(pil_image).to(torch.bfloat16).cuda()
 
         with torch.inference_mode():
-            response = model.chat(tokenizer, pixel_values, PROMPT, generation_config)
+            response = model.chat(tokenizer, pixel_values, prompt, generation_config)
 
         labels.append(response.strip().strip("."))
         del pixel_values

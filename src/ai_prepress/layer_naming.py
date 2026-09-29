@@ -16,6 +16,14 @@ internally (see deploy/layer_naming.py for why: batching them into one model.bat
 OOMs a T4 on a real multi-layer photo). Default timeout is 300s, not the 60s a single-shot batch
 call would have justified - a real deployed 6-layer request took 77s sequential, and MAX_LAYERS
 in features/layer_separation.py allows up to 8.
+
+`list_candidate_objects` reuses this same endpoint (with the optional `prompt`/`max_new_tokens`
+overrides deploy/layer_naming.py added for exactly this) to ask InternVL to enumerate every
+distinct object in a WHOLE photo BEFORE any layers exist - the first stage of the per-instance
+separation pipeline in features/layer_separation.py, which needs candidate object names to hand
+Grounding DINO as its own open-vocabulary text prompt. `name_layers` above is untouched: every
+field it sends keeps the server's old defaults, so a per-crop naming call behaves identically to
+before this function existed.
 """
 
 from __future__ import annotations
@@ -58,3 +66,38 @@ def name_layers(layers: list[LoadedImage], endpoint: str | None = None, timeout:
     response = httpx.post(endpoint, files=files, timeout=timeout)
     response.raise_for_status()
     return response.json()["labels"]
+
+
+OBJECT_LIST_PROMPT = (
+    "<image>\nList every distinct physical object in this photo that could be individually cut "
+    "out or retouched, comma-separated, short names only (1-3 words each, like 'coffee mug' or "
+    "'orange'). Skip the background, wall, table surface, or floor unless one of them is itself a "
+    "genuinely separate object. Respond with only the comma-separated list, no numbering, no "
+    "explanation."
+)
+OBJECT_LIST_MAX_NEW_TOKENS = 64  # a single-crop label fits in the server's default 16 tokens, a
+# whole-photo list of several short names doesn't - measured against a real deploy, see
+# features.layer_separation for why this needed its own value rather than reusing name_layers'
+
+
+def list_candidate_objects(image: LoadedImage, endpoint: str | None = None, timeout: float = 60.0) -> list[str]:
+    """Asks InternVL to enumerate the distinct objects in the WHOLE photo (not a pre-separated
+    layer) - the candidate names features.layer_separation hands to Grounding DINO. Returns an
+    empty list on an empty/unparseable response, same "nothing to work with" shape as an empty
+    `layer_alphas` elsewhere in this project - the caller decides what an empty list means."""
+    endpoint = endpoint or os.environ.get("AI_PREPRESS_LAYER_NAMING_URL", "")
+    if not endpoint:
+        raise ValueError(
+            "no layer-naming endpoint configured - set AI_PREPRESS_LAYER_NAMING_URL "
+            "or pass endpoint= explicitly"
+        )
+
+    files = [("files", ("photo.png", _flatten_to_white(image), "image/png"))]
+    data = {"prompt": OBJECT_LIST_PROMPT, "max_new_tokens": OBJECT_LIST_MAX_NEW_TOKENS}
+
+    response = httpx.post(endpoint, files=files, data=data, timeout=timeout)
+    response.raise_for_status()
+    labels = response.json()["labels"]
+    if not labels:
+        return []
+    return [name.strip() for name in labels[0].split(",") if name.strip()]
