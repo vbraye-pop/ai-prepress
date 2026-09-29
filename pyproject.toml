@@ -20,6 +20,11 @@ dependencies = [
     # detector calculator (TensorsToDetectionsCalculator inits Metal unconditionally and aborts
     # when the graph never registers a Metal service, even with delegate=CPU explicitly set)
     "mediapipe==0.10.35",
+    # already resolved transitively via mediapipe's own dependency on it - declared directly too
+    # since alpha_refine.py imports cv2.ximgproc, which mediapipe doesn't re-export. Deliberately
+    # opencv-contrib-python, not opencv-python: the two ship the same cv2 package and conflict if
+    # both land in one environment, and mediapipe already pulls in the contrib build
+    "opencv-contrib-python>=4.10",
 ]
 
 [dependency-groups]
