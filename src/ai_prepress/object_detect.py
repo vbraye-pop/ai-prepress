@@ -3,10 +3,10 @@
 Grounding DINO open-vocabulary detection, the first stage of the new per-instance separation
 pipeline - see deploy/object_detect.py's module docstring for the model and inference details.
 
-Coordinate-space contract, shared verbatim with the endpoint's own docstring and with
-ai_prepress/object_segment.py (its sibling in this pipeline stage): returned boxes are absolute
-pixel XYXY floats in the coordinate space of `image` EXACTLY as passed in, no resizing on either
-side of the wire.
+Coordinate-space contract - the invariant sentence below is shared verbatim with
+ai_prepress.object_segment (its sibling in this pipeline stage): boxes are absolute pixel XYXY
+floats in the coordinate space of the image EXACTLY as passed in, no resizing on either side of
+the wire.
 
 Plain synchronous httpx.post, single forward pass per call - same shape as object_count.py's
 client, not the submit/poll pattern layer_decompose.py needs.

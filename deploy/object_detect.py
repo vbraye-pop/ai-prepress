@@ -10,10 +10,11 @@ is known-broken (huggingface/transformers#35976, #35979) and without this flag a
 back to the working pure-PyTorch attention path anyway, just after a slow, warning-laden build
 attempt on every cold start.
 
-Coordinate-space contract, shared verbatim with deploy/object_segment.py (its sibling in this
-pipeline stage) - both files must keep this paragraph identical: returned boxes are absolute pixel
-XYXY floats in the coordinate space of the image EXACTLY as uploaded, no server-side resizing. The
-processor internally resizes for the model's own input, but
+Coordinate-space contract - the invariant sentence below is shared verbatim with
+deploy/object_segment.py (its sibling in this pipeline stage), so a reader of either file sees the
+same guarantee in the same words: boxes are absolute pixel XYXY floats in the coordinate space of
+the image EXACTLY as uploaded, no server-side resizing. The processor internally resizes for the
+model's own input, but
 post_process_grounded_object_detection's target_sizes=[source.size[::-1]] rescales its output back
 to the original image before this endpoint ever returns it.
 
