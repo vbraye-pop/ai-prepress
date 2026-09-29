@@ -24,9 +24,32 @@ than assumed from the earlier general research pass:
    real photo once this is actually deployed (see the plan's verification section) - flagged, not
    silently assumed correct.
 
-`resolution` is a fixed working bucket (640 or 1024, not the input's own size) - every output layer
-gets resized back to the source image's dimensions before being sent over the wire, same
-upsample-back-to-input-size pattern deploy/face_parsing.py already uses.
+`resolution` is a fixed working bucket (not the input's own size) - every output layer gets resized
+back to the source image's dimensions before being sent over the wire, same upsample-back-to-input-
+size pattern deploy/face_parsing.py already uses.
+
+RESOLUTION_BUCKET is 640, not 1024, decided by A/B testing both against real photos rather than
+taken on the model card's own "recommended for this version" line. Same seed, same photos
+(art.jpg's pitcher/orange/book/table still life, portrait.png's person-on-grass natural photo),
+same layers=4, only the bucket changed:
+
+- Quality: 1024 did not produce a cleaner separation. On art.jpg it returned 3 layers same as 640,
+  but one of the three came back at exactly 0.0 alpha coverage - a wasted, empty layer, not a
+  finer split of the orange+table merge. Coverage of the two remaining layers also shifted
+  (0.19/0.18 at 1024 vs 0.08/0.37/0.07 at 640), consistent with a different, not better, split.
+- Edge sharpness: every layer is resized back to source resolution regardless of the working
+  bucket, so a narrower bucket mechanically narrows the raw output ramp width by roughly
+  (640/1024 = 0.625x) even with zero real quality change. Measured raw median ramp width at 1024
+  came out to ~0.64-0.75x of 640's on both test photos - at or above that mechanical floor, so
+  there is no evidence 1024 resolves the alpha edge any more finely than 640 once the resampling
+  arithmetic is accounted for.
+- Latency: cold start at 1024 took 587s against this class's own `timeout=600` - 13 seconds of
+  headroom on a single measurement, with no retry budget. A second 1024 call 43s later took 490s.
+  Two containers were alive at the time so it isn't confirmed which one served it, but neither
+  reading comes close to 640's own measured ~430s cold / ~125s warm, and both sit near the 600s
+  ceiling.
+
+1024 was rejected on all three axes measured, not just latency.
 
 Deploy: uv run --group deploy modal deploy deploy/layer_separation.py
 
@@ -51,7 +74,7 @@ from fastapi.responses import JSONResponse
 
 MODEL_ID = "Qwen/Qwen-Image-Layered"
 DEFAULT_LAYER_COUNT = 4  # matches the model's own documented example - see module docstring
-RESOLUTION_BUCKET = 640  # "recommended for this version" per the model's own README
+RESOLUTION_BUCKET = 640  # measured against 1024 on real photos - see module docstring
 
 app = modal.App("ai-prepress-layer-separation")
 
