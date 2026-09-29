@@ -7,9 +7,12 @@ rejected for Business Source License 1.1. Task is narrow (label one isolated cro
 is already generous, no need for anything bigger.
 
 Real API, quoted from the model's own card, not guessed: `AutoModel.from_pretrained(...,
-trust_remote_code=True)` + a `model.batch_chat(tokenizer, pixel_values, num_patches_list=...,
-questions=..., generation_config=...)` call that labels every image in one request - used here to
-label a whole photo's layers in a single call instead of one round trip per layer.
+trust_remote_code=True)` + `model.chat(tokenizer, pixel_values, question, generation_config)`,
+called once per layer rather than batched through `model.batch_chat` - a real deployed 6-layer
+request confirmed the batched form OOMs a T4 (14.57GiB) with this image's plain eager attention
+build (no flash-attn wheel installed), since every image's own dynamic_preprocess tiles get
+concatenated into one attention pass. Per-image calls bound peak memory to one image's own tile
+count regardless of how many layers a photo has.
 
 Two real integration details, confirmed from the model card's own reference code, not assumed:
 1. The model's own `load_image()` does `Image.open(...).convert('RGB')` as its first step - it
@@ -170,26 +173,28 @@ async def name(files: list[UploadFile] = File(...)) -> Response:
     ).eval().cuda()
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True, use_fast=False)
 
-    per_image_pixel_values = []
+    generation_config = {"max_new_tokens": 16, "do_sample": False}
+
+    # One image (and its own dynamic_preprocess tiles) per batch_chat call, not the whole
+    # request concatenated into one - a real deployed 6-layer request confirmed this GPU OOMs on
+    # a T4 (14.57GiB) with the plain torch/eager attention build this image installs (no
+    # flash-attn wheel): even 2 images already logged retried allocator warnings before
+    # succeeding, so this isn't a large-N-only edge case worth a higher batch cap, it's the batch
+    # concatenation itself. Per-image calls bound peak memory to one image's own tile count
+    # regardless of how many layers a photo has, at the cost of one more small generate() call
+    # per layer rather than one big one - the model itself is already reloaded fresh per request
+    # (see module docstring), so this adds no extra load time, only extra (cheap) generation calls.
+    labels = []
     for upload in files:
         contents = await upload.read()
         # already flat RGB by the time it gets here - see module docstring point 1
         pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
-        per_image_pixel_values.append(_load_pixel_values(pil_image).to(torch.bfloat16).cuda())
+        pixel_values = _load_pixel_values(pil_image).to(torch.bfloat16).cuda()
 
-    num_patches_list = [pv.size(0) for pv in per_image_pixel_values]
-    pixel_values = torch.cat(per_image_pixel_values, dim=0)
-    questions = [PROMPT] * len(files)
-    generation_config = {"max_new_tokens": 16, "do_sample": False}
+        with torch.inference_mode():
+            response = model.chat(tokenizer, pixel_values, PROMPT, generation_config)
 
-    with torch.inference_mode():
-        responses = model.batch_chat(
-            tokenizer,
-            pixel_values,
-            num_patches_list=num_patches_list,
-            questions=questions,
-            generation_config=generation_config,
-        )
-
-    labels = [response.strip().strip(".") for response in responses]
+        labels.append(response.strip().strip("."))
+        del pixel_values
+        torch.cuda.empty_cache()
     return JSONResponse({"labels": labels})
