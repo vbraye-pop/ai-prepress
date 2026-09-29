@@ -58,7 +58,11 @@ The mask LaMa actually sees is dilated by INPAINT_MASK_FEATHER_PX before the for
 2. The mask gets NEAREST-downscaled to MAX_INPAINT_EDGE resolution before this call - a hole pixel
    right at the caller's exact boundary can round to "not hole" at the working resolution, which
    would leave LaMa treating a sliver of the removed object as valid context to preserve rather
-   than content to synthesize. A few pixels of dilation margin absorbs that rounding error too.
+   than content to synthesize. A few pixels of dilation margin is meant to absorb that rounding
+   error too - checked so far only indirectly, by confirming a real downscaled request (art.jpg
+   upscaled 2.5x to force scale < 1.0) comes back with every far-from-the-hole pixel byte-exact
+   and no visible misalignment crescent at the hole boundary, not by an isolated ablation that
+   disables dilation and shows the rounding artifact appearing without it.
 
 GPU tier T4, `@app.cls` + `@modal.enter()` rather than a plain `@app.function`: `torch.jit.load`-ing
 the TorchScript module fresh on every request would be real, avoidable overhead for what should
