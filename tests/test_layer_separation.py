@@ -489,7 +489,7 @@ def test_separate_layers_per_instance_survives_a_raising_matte_call(monkeypatch)
     )
     monkeypatch.setattr(layer_separation_module.object_segment, "segment_boxes", lambda image, boxes, timeout=None: [mask])
 
-    def failing_matte(crops):
+    def failing_matte(crops, timeout=None):
         raise RuntimeError("endpoint down")
 
     monkeypatch.setattr(layer_separation_module.instance_matte, "matte_crops", failing_matte)
