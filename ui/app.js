@@ -1078,7 +1078,7 @@ function setupAiCrop() {
   let currentCenter = null; // [cx,cy], preview space - follows manual drags/resizes
   let orientationSwapped = false;
   let dragMode = null; // null | "move" | "resize"
-  let dragHandleAnchor = null; // the FIXED opposite corner while resizing
+  let dragHandle = null; // the handle object ({point, axis}) resize-dragging started from
   let dragStart = null;
   let rectAtDragStart = null;
 
@@ -1154,6 +1154,7 @@ function setupAiCrop() {
   customH.addEventListener("input", recomputeFromCenter);
   marginSlider.addEventListener("input", recomputeFromCenter);
   gridSelect.addEventListener("change", redraw);
+  lockAspectCheckbox.addEventListener("change", redraw); // toggles whether edge handles show
   swapButton.addEventListener("click", () => {
     orientationSwapped = !orientationSwapped;
     recomputeFromCenter();
@@ -1161,6 +1162,24 @@ function setupAiCrop() {
   resetButton.addEventListener("click", () => selectCandidate(selectedIndex));
 
   // --- drawing --------------------------------------------------------------------------------
+  // Research note (see project history): professional crop tools (Capture One's Overlay tool
+  // specifically) don't rely on the crop line's own color for legibility against arbitrary photo
+  // content - they dim everything OUTSIDE the kept area instead, so the frame reads clearly
+  // regardless of what's underneath it on either side. Grid lines still sit on top of real,
+  // undimmed photo content though, so they keep a thin dark halo stroke behind the light one -
+  // the one targeted exception to "pick a single depth cue," used only where dimming can't help.
+
+  function drawDimMask(rect) {
+    const ctx = canvas.getContext("2d");
+    const [x0, y0, x1, y1] = rect;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, canvas.width, canvas.height);
+    ctx.rect(x0, y0, x1 - x0, y1 - y0);
+    ctx.fillStyle = "rgba(8, 8, 12, 0.6)"; // --surface-sunken, translucent
+    ctx.fill("evenodd");
+    ctx.restore();
+  }
 
   function drawGrid(rect) {
     const kind = gridSelect.value;
@@ -1173,29 +1192,48 @@ function setupAiCrop() {
     const fracs = kind === "golden" ? [0.382, 0.618] : [1 / 3, 2 / 3];
     const ctx = canvas.getContext("2d");
     ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,0.65)";
-    ctx.lineWidth = 1;
     for (const f of fracs) {
-      ctx.beginPath();
-      ctx.moveTo(x0 + w * f, y0);
-      ctx.lineTo(x0 + w * f, y1);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x0, y0 + h * f);
-      ctx.lineTo(x1, y0 + h * f);
-      ctx.stroke();
+      const vx = Math.round(x0 + w * f) + 0.5; // half-pixel snap keeps a 1px line crisp, not blurred
+      const hy = Math.round(y0 + h * f) + 0.5;
+      // dark halo first, then the light line on top - the one place a second depth cue earns
+      // its cost, since these lines cross real (unpredictable) photo content, not a dimmed void
+      for (const [width, style] of [[3, "rgba(0,0,0,0.45)"], [1, "rgba(255,255,255,0.75)"]]) {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(vx, y0);
+        ctx.lineTo(vx, y1);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x0, hy);
+        ctx.lineTo(x1, hy);
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
 
+  // Corner handles always resize both axes (aspect-locked or free, see the mousemove handler
+  // below). Edge-midpoint handles only ever move one axis and only make sense in freeform mode -
+  // showing them while aspect is locked would offer a drag that can't actually do anything, so
+  // they're included only when unlocked, matching Photoshop's own corners+edges handle set.
   function cropHandlePoints(rect) {
     const [x0, y0, x1, y1] = rect;
-    return [
-      [x0, y0],
-      [x1, y0],
-      [x0, y1],
-      [x1, y1],
+    const midX = (x0 + x1) / 2;
+    const midY = (y0 + y1) / 2;
+    const corners = [
+      { point: [x0, y0], axis: "both" },
+      { point: [x1, y0], axis: "both" },
+      { point: [x0, y1], axis: "both" },
+      { point: [x1, y1], axis: "both" },
     ];
+    if (lockAspectCheckbox.checked) return corners;
+    return corners.concat([
+      { point: [midX, y0], axis: "y" },
+      { point: [midX, y1], axis: "y" },
+      { point: [x0, midY], axis: "x" },
+      { point: [x1, midY], axis: "x" },
+    ]);
   }
 
   // The canvas element's CSS box is sized to 100%/100% of its flex-centered wrapper (see
@@ -1245,7 +1283,7 @@ function setupAiCrop() {
       candidates.forEach((c, i) => {
         const [cx, cy] = c.center;
         ctx.beginPath();
-        ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+        ctx.arc(cx, cy, 8, 0, Math.PI * 2); // 8px - tokens.css's own spacing scale, not arbitrary
         ctx.fillStyle = i === selectedIndex ? "#8a1224" : "rgba(28,28,38,0.85)";
         ctx.fill();
         ctx.strokeStyle = "#fff";
@@ -1255,16 +1293,24 @@ function setupAiCrop() {
     }
 
     if (!cropRect) return;
+
+    drawDimMask(cropRect);
     drawGrid(cropRect);
 
-    const [x0, y0, x1, y1] = cropRect;
+    // whole-pixel-snapped (not half-pixel - that convention is for ODD widths) so an even 2px
+    // stroke centers cleanly on the boundary instead of anti-aliasing across three pixel rows
+    const fx0 = Math.round(cropRect[0]);
+    const fy0 = Math.round(cropRect[1]);
+    const fx1 = Math.round(cropRect[2]);
+    const fy1 = Math.round(cropRect[3]);
     ctx.strokeStyle = "#8a1224";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    ctx.lineWidth = 2; // a thin frame reads fine now that the surround is dimmed - the dimming
+    // does the legibility work, not the line's own weight/contrast
+    ctx.strokeRect(fx0, fy0, fx1 - fx0, fy1 - fy0);
 
     const handleSize = CROP_HANDLE_SCREEN_SIZE * displayScale();
     const half = handleSize / 2;
-    for (const [hx, hy] of cropHandlePoints(cropRect)) {
+    for (const { point: [hx, hy] } of cropHandlePoints(cropRect)) {
       ctx.fillStyle = "#8a1224";
       ctx.fillRect(hx - half, hy - half, handleSize, handleSize);
       ctx.strokeStyle = "#fff";
@@ -1283,9 +1329,10 @@ function setupAiCrop() {
   function hitHandle(point) {
     if (!cropRect) return null;
     const radius = CROP_HANDLE_HIT_SCREEN_RADIUS * displayScale();
-    for (const corner of cropHandlePoints(cropRect)) {
-      if (Math.abs(point[0] - corner[0]) <= radius && Math.abs(point[1] - corner[1]) <= radius) {
-        return corner;
+    for (const handle of cropHandlePoints(cropRect)) {
+      const [hx, hy] = handle.point;
+      if (Math.abs(point[0] - hx) <= radius && Math.abs(point[1] - hy) <= radius) {
+        return handle;
       }
     }
     return null;
@@ -1302,11 +1349,8 @@ function setupAiCrop() {
 
     if (handle) {
       dragMode = "resize";
-      const [x0, y0, x1, y1] = cropRect;
-      dragHandleAnchor = [
-        Math.abs(handle[0] - x0) < Math.abs(handle[0] - x1) ? x1 : x0,
-        Math.abs(handle[1] - y0) < Math.abs(handle[1] - y1) ? y1 : y0,
-      ];
+      dragHandle = handle;
+      rectAtDragStart = cropRect.slice();
     } else if (pointInRect(point, cropRect)) {
       dragMode = "move";
       dragStart = point;
@@ -1324,16 +1368,33 @@ function setupAiCrop() {
   window.addEventListener("mousemove", (event) => {
     if (!dragMode) return;
     const point = canvasPoint(event);
+    const [sx0, sy0, sx1, sy1] = rectAtDragStart;
 
     if (dragMode === "move") {
       const dx = point[0] - dragStart[0];
       const dy = point[1] - dragStart[1];
-      const [sx0, sy0, sx1, sy1] = rectAtDragStart;
       cropRect = clampRectToImage([sx0 + dx, sy0 + dy, sx1 + dx, sy1 + dy], imgW, imgH);
+    } else if (dragHandle.axis === "x") {
+      // edge handle (unlocked aspect only) - only this one axis moves, the other edge of the
+      // SAME axis stays put; height is untouched entirely
+      const [hx] = dragHandle.point;
+      let x0 = sx0, x1 = sx1;
+      if (Math.abs(hx - sx0) < Math.abs(hx - sx1)) x0 = point[0];
+      else x1 = point[0];
+      cropRect = clampRectToImage([Math.min(x0, x1), sy0, Math.max(x0, x1), sy1], imgW, imgH);
+    } else if (dragHandle.axis === "y") {
+      const [, hy] = dragHandle.point;
+      let y0 = sy0, y1 = sy1;
+      if (Math.abs(hy - sy0) < Math.abs(hy - sy1)) y0 = point[1];
+      else y1 = point[1];
+      cropRect = clampRectToImage([sx0, Math.min(y0, y1), sx1, Math.max(y0, y1)], imgW, imgH);
     } else {
-      // resize from a fixed opposite corner - aspect-locked resizing picks whichever axis
-      // implies the larger rect, same "farthest drag wins" convention Photoshop/Figma use
-      const [ax, ay] = dragHandleAnchor;
+      // corner handle, both axes - resize from the fixed opposite corner. Aspect-locked picks
+      // whichever axis implies the larger rect, the same "farthest drag wins" convention
+      // Photoshop/Figma use; unlocked just follows the pointer directly on both axes.
+      const [hx, hy] = dragHandle.point;
+      const ax = Math.abs(hx - sx0) < Math.abs(hx - sx1) ? sx1 : sx0;
+      const ay = Math.abs(hy - sy0) < Math.abs(hy - sy1) ? sy1 : sy0;
       let x0, y0, x1, y1;
       if (lockAspectCheckbox.checked) {
         const ratio = aspectRatio();
@@ -1352,8 +1413,7 @@ function setupAiCrop() {
       } else {
         x0 = ax; y0 = ay; x1 = point[0]; y1 = point[1];
       }
-      const rect = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
-      cropRect = clampRectToImage(rect, imgW, imgH);
+      cropRect = clampRectToImage([Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)], imgW, imgH);
     }
     currentCenter = rectCenter(cropRect);
     redraw();
