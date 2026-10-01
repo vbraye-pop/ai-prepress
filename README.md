@@ -258,6 +258,21 @@ save(apply_crop(image, rect), "cropped.tiff")
 
 **AI Crop tab in the UI**: upload a photo, pick a bbox source (Auto by default), hit Detect. Fine-tune the result by dragging the crop rectangle, switching aspect ratio/margin/grid, or clicking a different face - all instant, no server round trip - then hit Apply to get the full-precision cropped TIFF.
 
+**After Apply, the rectangle keeps going - and a faint dashed outline marks where the last applied crop was.** Nothing stops someone from continuing to drag or resize after exporting, and without some record of it there's no way to tell "this is a new, unexported adjustment" from "this still matches what I downloaded." A one-time undimmed, dashed echo of the applied rect appears the moment the live one moves away from it, drawn under the live frame so the active crop still reads as the one in charge - verified live by applying a crop, then dragging the frame off its own position and confirming the dashed echo rendered exactly where the solid frame used to be.
+
+## UI polish pass (whole app, not just AI Crop)
+
+A round of visual polish across every tab, built on the existing POP R&D dark design system rather than introducing a new look - all of it just app.js/style.css/image-import.css, the three files that were always meant to carry app-specific styling on top of the vendored tokens.css/components.css handoff:
+
+- **Every range slider in the app** (Face Regions' opacity, Retouch Faces' seven strength sliders, AI Crop's margin) got a custom flat track + circular thumb in place of each browser's own differently-shaped native widget, with the filled portion tracking the current value the way a native slider implies progress - driven by one small `initRangeFills()` helper rather than per-feature code, since every slider shares the same `.slider-row` markup.
+- **Every `<select>`** picked up one consistent custom chevron (the native arrow doesn't match the dark theme at all and renders differently per browser) via a single `select.input` rule.
+- **Every checkbox** in the app (Lock aspect, each Layer Separation layer's visibility toggle) now shares one `accent-color` rule instead of three separate declarations that happened to agree.
+- **A real bug, not just a cosmetic miss:** `#layer-sep-show-all` was visibly showing before any photo was even imported - the same `[hidden]`-vs-own-`display`-property CSS specificity footgun this file already had paired overrides for elsewhere (`.face-canvas-wrap`, `.compare-pair`, `.layer-sep-canvas-wrap`), just missed for this one ID. Fixed the same way those were.
+- **Every inspector panel header** (Stats, Match Look, Regions, Retouch Faces, Layer Separation, AI Crop) gained a hairline divider under its title, and **every empty import dropzone** gained a softly-bordered circular icon badge instead of a bare glyph floating in what was otherwise a very large, very empty box - both one shared rule each, so all six tabs changed together rather than one at a time.
+- **Scrollbars** across the app (inspector panels, legend lists) now use a thin, theme-colored style instead of each OS's own default, via `scrollbar-color` for Firefox and `::-webkit-scrollbar` for Chrome/Safari.
+
+Deliberately NOT done: new colors, gradients, glows, or any effect not already present somewhere else in the vendored design system - the brief was to polish within the existing visual language, not invent a new one.
+
 ## Roadmap
 
 - [x] Shared I/O + acceptance checks
@@ -265,7 +280,7 @@ save(apply_crop(image, rect), "cropped.tiff")
 - [x] Match Look
 - [ ] pywebview desktop shell around the current FastAPI + HTML UI
 - [x] Layer Separation Phase A - Qwen-Image-Layered behind Modal, RGBA TIFF export, bit-depth-preserving compositing, automatic per-photo layer count (SAM2 + mask post-filtering), automatic sequential naming (InternVL3.5-2B), a contamination validator with recursive repair, a real live-composite layers-panel UI - see above, all deployed and tested against real photos. Still open: a background-fill fallback (LaMa/BrushNet/PowerPaint) - stays deferred, only needed for flat/graphic source images, not natural photography - and `psdtags` native-Photoshop-layers export pending a real round-trip test. Confirmed limitation, not fixed by this phase: the still life's orange+table merge persists - the `layers` parameter genuinely reaches the model and changes its output, but more layers partly manifests as empty junk layers rather than a finer real split, and the contamination validator catches the resulting duplicate layers without being able to repair them. Adjacent-object merging and content bleed across occlusion need Phase B (detect + segment + matte hybrid), not built yet.
-- [x] AI Crop - Subject/Face/Auto bbox sources, weighted multi-face "All faces" candidate, mass-centroid centering, print-oriented aspect presets, interactive draggable/resizable crop rect with grid overlay, detect/apply split for zero-round-trip live editing - see above. Rotation/straighten and a genuine multi-file batch queue are explicitly deferred, not built
+- [x] AI Crop - Subject/Face/Auto bbox sources, weighted multi-face "All faces" candidate, mass-centroid centering, print-oriented aspect presets, interactive draggable/resizable crop rect with grid overlay, a dashed ghost marker for the last applied crop, detect/apply split for zero-round-trip live editing - see above. Rotation/straighten and a genuine multi-file batch queue are explicitly deferred, not built
 - [x] Face regions (`ai_prepress.face_landmarks`, local MediaPipe) - supersedes the earlier Modal-deployed semantic parser, see above. `deploy/face_parsing.py` and `ai_prepress.face_parsing` are still in the repo (real, tested, still deployed) but no longer wired into the UI.
 - [x] Retouch Faces - Dark Circles/Even Skin/Contouring via LF/HF split on the face-region masks, Eye Whiten/Teeth Whiten/Lip Enhance via direct HSL grades, multi-face support, mask Feather/Edge reshape - see above. Blemish removal and manual mask-brush editing still open, not built yet.
 - [x] Dust removal training-data synthesizer (`training/dust_removal/`)
