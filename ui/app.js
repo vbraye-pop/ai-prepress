@@ -1198,11 +1198,41 @@ function setupAiCrop() {
     ];
   }
 
-  // canvas-internal px per CSS px - multiply a desired on-screen size by this to get the
-  // equivalent size in the coordinate space redraw()/hitHandle() both actually work in
-  function displayScale() {
+  // The canvas element's CSS box is sized to 100%/100% of its flex-centered wrapper (see
+  // .face-canvas-wrap in style.css), which almost never matches the source image's own aspect
+  // ratio - object-fit:contain then letterboxes the actual drawn content inside that box,
+  // centered, with blank space on two sides. getBoundingClientRect() returns the FULL CSS box,
+  // not the visible letterboxed content rect - dividing by it directly (an earlier version of
+  // this function did exactly that) silently produces two DIFFERENT x/y scale factors whenever
+  // the image isn't the same aspect as the box, instead of the one uniform scale object-fit:
+  // contain actually uses, and ignores the letterbox offset entirely. That's what made dragging
+  // feel wrong on any non-square image, in a way no amount of enlarging the handles could fix -
+  // the click coordinates themselves were being mapped to the wrong place on the image.
+  function canvasRenderRect() {
     const bounds = canvas.getBoundingClientRect();
-    return bounds.width ? canvas.width / bounds.width : 1;
+    const boxAspect = bounds.width / bounds.height;
+    const imageAspect = canvas.width / canvas.height;
+
+    let renderWidth, renderHeight;
+    if (imageAspect > boxAspect) {
+      renderWidth = bounds.width;
+      renderHeight = renderWidth / imageAspect;
+    } else {
+      renderHeight = bounds.height;
+      renderWidth = renderHeight * imageAspect;
+    }
+
+    return {
+      scale: renderWidth ? canvas.width / renderWidth : 1,
+      offsetX: bounds.left + (bounds.width - renderWidth) / 2,
+      offsetY: bounds.top + (bounds.height - renderHeight) / 2,
+    };
+  }
+
+  // multiply a desired on-screen CSS-px size by this to get the equivalent size in canvas-
+  // internal px, for drawing/hit-testing the handles at a constant apparent size on screen
+  function displayScale() {
+    return canvasRenderRect().scale;
   }
 
   function redraw() {
@@ -1246,10 +1276,8 @@ function setupAiCrop() {
   // --- interaction: drag to move, drag a corner to resize, click a marker to re-center --------
 
   function canvasPoint(event) {
-    const bounds = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / bounds.width;
-    const scaleY = canvas.height / bounds.height;
-    return [(event.clientX - bounds.left) * scaleX, (event.clientY - bounds.top) * scaleY];
+    const { scale, offsetX, offsetY } = canvasRenderRect();
+    return [(event.clientX - offsetX) * scale, (event.clientY - offsetY) * scale];
   }
 
   function hitHandle(point) {
