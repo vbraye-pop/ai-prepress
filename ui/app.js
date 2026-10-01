@@ -27,6 +27,32 @@ function initRangeFills() {
   });
 }
 
+// Locks every button in the action bar for the duration of a request (not just the one that
+// was clicked - "Change photo" mid-request would orphan it) and shows exactly one spinner, in
+// the status line every tab already has. Each button's own disabled state from before the
+// request is restored afterward rather than forced back to enabled, since several of these
+// buttons are legitimately re-disabled for unrelated reasons (no file picked yet, etc).
+function setBusyMessage(status, message) {
+  status.innerHTML = `<span class="spinner" aria-hidden="true"></span>${message}`;
+}
+
+function setBusy(actionBar, status, message) {
+  actionBar.querySelectorAll("button").forEach((b) => {
+    b.dataset.wasDisabled = b.disabled ? "true" : "false";
+    b.disabled = true;
+  });
+  setBusyMessage(status, message);
+}
+
+// Only restores button state - never touches status text, since every call site sets its own
+// final status message (done / an error / "no face detected") right where it already returns.
+function clearBusy(actionBar) {
+  actionBar.querySelectorAll("button").forEach((b) => {
+    b.disabled = b.dataset.wasDisabled === "true";
+    delete b.dataset.wasDisabled;
+  });
+}
+
 const ACTIVE_TAB_STORAGE_KEY = "ai-prepress-active-tab";
 
 function setupViewTabs() {
@@ -154,6 +180,7 @@ function setupInspect() {
 
 function setupMatchLook() {
   const submitButton = document.getElementById("match-submit");
+  const actionBar = submitButton.closest(".action-bar");
   const changePhotosButton = document.getElementById("match-change-photos");
   const status = document.getElementById("match-status");
   const placeholder = document.getElementById("match-placeholder");
@@ -187,47 +214,51 @@ function setupMatchLook() {
   });
 
   submitButton.addEventListener("click", async () => {
-    status.textContent = "running...";
+    setBusy(actionBar, status, "running...");
     placeholder.hidden = true;
     report.hidden = true;
     downloadLink.hidden = true;
 
-    const body = new FormData();
-    body.append("target", targetImporter.getFile());
-    body.append("reference", referenceImporter.getFile());
-    body.append("method", document.getElementById("method").value);
-
-    let response;
     try {
-      response = await fetch("/api/match-look", { method: "POST", body });
-    } catch (err) {
-      status.textContent = `request failed: ${err}`;
-      return;
+      const body = new FormData();
+      body.append("target", targetImporter.getFile());
+      body.append("reference", referenceImporter.getFile());
+      body.append("method", document.getElementById("method").value);
+
+      let response;
+      try {
+        response = await fetch("/api/match-look", { method: "POST", body });
+      } catch (err) {
+        status.textContent = `request failed: ${err}`;
+        return;
+      }
+
+      if (!response.ok) {
+        status.textContent = `server error: ${response.status}`;
+        return;
+      }
+
+      const result = await response.json();
+      status.textContent = "done";
+
+      document.getElementById("match-target-preview").src = `/api/file/${result.target_id}/preview.jpg?t=${Date.now()}`;
+      document.getElementById("match-result-preview").src = `/api/file/${result.result_id}/preview.jpg?t=${Date.now()}`;
+      downloadLink.href = `/api/file/${result.result_id}/download`;
+
+      renderReport(report, [
+        ["Delta-E mean", result.delta_e_mean.toFixed(2)],
+        ["Delta-E max", result.delta_e_max.toFixed(2)],
+        ["Bit depth collapsed", result.bit_depth_collapsed ? "yes" : "no", result.bit_depth_collapsed ? "bad" : "good"],
+        ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
+      ]);
+      report.hidden = false;
+      downloadLink.hidden = false;
+      importPair.hidden = true;
+      resultPair.hidden = false;
+      changePhotosButton.hidden = false;
+    } finally {
+      clearBusy(actionBar);
     }
-
-    if (!response.ok) {
-      status.textContent = `server error: ${response.status}`;
-      return;
-    }
-
-    const result = await response.json();
-    status.textContent = "done";
-
-    document.getElementById("match-target-preview").src = `/api/file/${result.target_id}/preview.jpg?t=${Date.now()}`;
-    document.getElementById("match-result-preview").src = `/api/file/${result.result_id}/preview.jpg?t=${Date.now()}`;
-    downloadLink.href = `/api/file/${result.result_id}/download`;
-
-    renderReport(report, [
-      ["Delta-E mean", result.delta_e_mean.toFixed(2)],
-      ["Delta-E max", result.delta_e_max.toFixed(2)],
-      ["Bit depth collapsed", result.bit_depth_collapsed ? "yes" : "no", result.bit_depth_collapsed ? "bad" : "good"],
-      ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
-    ]);
-    report.hidden = false;
-    downloadLink.hidden = false;
-    importPair.hidden = true;
-    resultPair.hidden = false;
-    changePhotosButton.hidden = false;
   });
 }
 
@@ -273,6 +304,7 @@ const DEFAULT_ACTIVE_REGIONS = new Set([
 
 function setupFaceRegions() {
   const submitButton = document.getElementById("face-submit");
+  const actionBar = submitButton.closest(".action-bar");
   const changePhotoButton = document.getElementById("face-change-photo");
   const mount = document.getElementById("face-import-mount");
   const placeholder = document.getElementById("face-placeholder");
@@ -369,13 +401,14 @@ function setupFaceRegions() {
     const file = importer.getFile();
     if (!file) return;
 
-    status.textContent = "finding regions...";
+    setBusy(actionBar, status, "finding regions...");
     placeholder.hidden = true;
     canvasWrap.hidden = true;
     changePhotoButton.hidden = true;
     opacityRow.hidden = true;
     legend.hidden = true;
 
+    try {
     const body = new FormData();
     body.append("image", file);
 
@@ -456,6 +489,9 @@ function setupFaceRegions() {
     opacityRow.hidden = false;
     legend.hidden = false;
     redraw();
+    } finally {
+      clearBusy(actionBar);
+    }
   });
 }
 
@@ -472,6 +508,7 @@ function defaultRetouchStrengths() {
 
 function setupRetouchFaces() {
   const submitButton = document.getElementById("retouch-submit");
+  const actionBar = submitButton.closest(".action-bar");
   const changePhotoButton = document.getElementById("retouch-change-photo");
   const mount = document.getElementById("retouch-import-mount");
   const placeholder = document.getElementById("retouch-placeholder");
@@ -678,58 +715,63 @@ function setupRetouchFaces() {
   submitButton.addEventListener("click", async () => {
     if (!fileId || faceCount === 0) return;
 
-    status.textContent = "retouching...";
+    setBusy(actionBar, status, "retouching...");
     report.hidden = true;
     downloadLink.hidden = true;
 
-    const payload = usedPerFace
-      ? { file_id: fileId, mode: "per_face", per_face: Object.fromEntries(Array.from({ length: faceCount }, (_, i) => [i, strengthsByTarget[i]])) }
-      : { file_id: fileId, mode: "all_faces", strengths: strengthsByTarget.all };
-
-    let response;
     try {
-      response = await fetch("/api/retouch-faces/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch (err) {
-      status.textContent = `request failed: ${err}`;
-      return;
+      const payload = usedPerFace
+        ? { file_id: fileId, mode: "per_face", per_face: Object.fromEntries(Array.from({ length: faceCount }, (_, i) => [i, strengthsByTarget[i]])) }
+        : { file_id: fileId, mode: "all_faces", strengths: strengthsByTarget.all };
+
+      let response;
+      try {
+        response = await fetch("/api/retouch-faces/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        status.textContent = `request failed: ${err}`;
+        return;
+      }
+
+      if (!response.ok) {
+        status.textContent = `server error: ${response.status}`;
+        return;
+      }
+
+      const result = await response.json();
+      if (!result.face_detected) {
+        status.textContent = "no face detected in this image";
+        return;
+      }
+
+      status.textContent = "done";
+      document.getElementById("retouch-original-preview").src = `/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`;
+      document.getElementById("retouch-result-preview").src = `/api/file/${result.result_id}/preview.jpg?t=${Date.now()}`;
+      downloadLink.href = `/api/file/${result.result_id}/download`;
+
+      renderReport(report, [
+        ["Delta-E mean", result.delta_e_mean.toFixed(2)],
+        ["Delta-E max", result.delta_e_max.toFixed(2)],
+        ["Bit depth collapsed", result.bit_depth_collapsed ? "yes" : "no", result.bit_depth_collapsed ? "bad" : "good"],
+        ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
+      ]);
+      report.hidden = false;
+      downloadLink.hidden = false;
+      mount.hidden = true;
+      resultPair.hidden = false;
+      changePhotoButton.hidden = false;
+    } finally {
+      clearBusy(actionBar);
     }
-
-    if (!response.ok) {
-      status.textContent = `server error: ${response.status}`;
-      return;
-    }
-
-    const result = await response.json();
-    if (!result.face_detected) {
-      status.textContent = "no face detected in this image";
-      return;
-    }
-
-    status.textContent = "done";
-    document.getElementById("retouch-original-preview").src = `/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`;
-    document.getElementById("retouch-result-preview").src = `/api/file/${result.result_id}/preview.jpg?t=${Date.now()}`;
-    downloadLink.href = `/api/file/${result.result_id}/download`;
-
-    renderReport(report, [
-      ["Delta-E mean", result.delta_e_mean.toFixed(2)],
-      ["Delta-E max", result.delta_e_max.toFixed(2)],
-      ["Bit depth collapsed", result.bit_depth_collapsed ? "yes" : "no", result.bit_depth_collapsed ? "bad" : "good"],
-      ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
-    ]);
-    report.hidden = false;
-    downloadLink.hidden = false;
-    mount.hidden = true;
-    resultPair.hidden = false;
-    changePhotoButton.hidden = false;
   });
 }
 
 function setupLayerSeparation() {
   const submitButton = document.getElementById("layer-sep-submit");
+  const actionBar = submitButton.closest(".action-bar");
   const changePhotoButton = document.getElementById("layer-sep-change-photo");
   const mount = document.getElementById("layer-sep-import-mount");
   const placeholder = document.getElementById("layer-sep-placeholder");
@@ -947,55 +989,54 @@ function setupLayerSeparation() {
   submitButton.addEventListener("click", async () => {
     if (!file) return;
 
-    submitButton.disabled = true;
-    status.textContent = "separating layers - this can take a few minutes on a cold start...";
+    setBusy(actionBar, status, "separating layers - this can take a few minutes on a cold start...");
     canvasWrap.hidden = true;
     layerList.hidden = true;
 
-    const body = new FormData();
-    body.append("image", file);
-
-    let response;
     try {
-      response = await fetch("/api/layer-separation", { method: "POST", body });
-    } catch (err) {
-      status.textContent = `request failed: ${err}`;
-      submitButton.disabled = false;
-      return;
+      const body = new FormData();
+      body.append("image", file);
+
+      let response;
+      try {
+        response = await fetch("/api/layer-separation", { method: "POST", body });
+      } catch (err) {
+        status.textContent = `request failed: ${err}`;
+        return;
+      }
+      if (!response.ok) {
+        status.textContent = `server error: ${response.status}`;
+        return;
+      }
+
+      const result = await response.json();
+      setBusyMessage(status, "loading previews...");
+
+      rows = buildRows(result);
+      try {
+        await loadRowImages();
+      } catch (err) {
+        status.textContent = `couldn't load previews: ${err}`;
+        return;
+      }
+
+      status.textContent =
+        result.layer_count === 0
+          ? "no separable layers found - showing the reconstructed background only"
+          : result.layer_count === 1
+            ? "1 layer separated"
+            : `${result.layer_count} layers separated`;
+
+      renderList();
+      composite();
+
+      placeholder.hidden = true;
+      mount.hidden = true;
+      canvasWrap.hidden = false;
+      changePhotoButton.hidden = false;
+    } finally {
+      clearBusy(actionBar);
     }
-    if (!response.ok) {
-      status.textContent = `server error: ${response.status}`;
-      submitButton.disabled = false;
-      return;
-    }
-
-    const result = await response.json();
-    status.textContent = "loading previews...";
-
-    rows = buildRows(result);
-    try {
-      await loadRowImages();
-    } catch (err) {
-      status.textContent = `couldn't load previews: ${err}`;
-      submitButton.disabled = false;
-      return;
-    }
-
-    status.textContent =
-      result.layer_count === 0
-        ? "no separable layers found - showing the reconstructed background only"
-        : result.layer_count === 1
-          ? "1 layer separated"
-          : `${result.layer_count} layers separated`;
-
-    renderList();
-    composite();
-
-    placeholder.hidden = true;
-    mount.hidden = true;
-    canvasWrap.hidden = false;
-    changePhotoButton.hidden = false;
-    submitButton.disabled = false;
   });
 }
 
@@ -1064,6 +1105,7 @@ const CROP_HANDLE_HIT_SCREEN_RADIUS = 16; // click target, CSS px - deliberately
 
 function setupAiCrop() {
   const detectButton = document.getElementById("crop-detect");
+  const actionBar = detectButton.closest(".action-bar");
   const applyButton = document.getElementById("crop-apply");
   const resetButton = document.getElementById("crop-reset");
   const changePhotoButton = document.getElementById("crop-change-photo");
@@ -1489,7 +1531,7 @@ function setupAiCrop() {
     const file = importer.getFile();
     if (!file) return;
 
-    status.textContent = "detecting...";
+    setBusy(actionBar, status, "detecting...");
     placeholder.hidden = true;
     canvasWrap.hidden = true;
     applyButton.hidden = true;
@@ -1499,107 +1541,115 @@ function setupAiCrop() {
     download.hidden = true;
     candidateHint.hidden = true;
 
-    const body = new FormData();
-    body.append("image", file);
-    body.append("mode", modeSelect.value);
-
-    let response;
     try {
-      response = await fetch("/api/ai-crop/detect", { method: "POST", body });
-    } catch (err) {
-      status.textContent = `request failed: ${err}`;
-      return;
+      const body = new FormData();
+      body.append("image", file);
+      body.append("mode", modeSelect.value);
+
+      let response;
+      try {
+        response = await fetch("/api/ai-crop/detect", { method: "POST", body });
+      } catch (err) {
+        status.textContent = `request failed: ${err}`;
+        return;
+      }
+
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        status.textContent = detail.detail || `server error: ${response.status}`;
+        mount.hidden = false;
+        return;
+      }
+
+      const result = await response.json();
+
+      let source;
+      try {
+        source = await loadImage(`/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`);
+      } catch (err) {
+        status.textContent = `couldn't load the preview: ${err}`;
+        return;
+      }
+
+      sourceImage = source;
+      fileId = result.file_id;
+      stride = result.stride;
+      imgW = source.naturalWidth;
+      imgH = source.naturalHeight;
+      canvas.width = imgW;
+      canvas.height = imgH;
+      candidates = result.candidates;
+      selectedIndex = result.primary_index;
+      currentCenter = candidates[selectedIndex].center.slice();
+
+      if (candidates.length > 1) {
+        candidateHint.textContent =
+          result.mode_used === "face"
+            ? `${candidates.length - 1} face(s) found - click one on the preview to crop around it (or "All faces", selected by default).`
+            : `${candidates.length} candidates found - click one on the preview to crop around it.`;
+        candidateHint.hidden = false;
+      }
+
+      recomputeFromCenter();
+
+      status.textContent = `done (${result.mode_used} mode)`;
+      mount.hidden = true;
+      canvasWrap.hidden = false;
+      applyButton.hidden = false;
+      resetButton.hidden = false;
+      changePhotoButton.hidden = false;
+      canvasWrap.focus();
+    } finally {
+      clearBusy(actionBar);
     }
-
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      status.textContent = detail.detail || `server error: ${response.status}`;
-      mount.hidden = false;
-      return;
-    }
-
-    const result = await response.json();
-
-    let source;
-    try {
-      source = await loadImage(`/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`);
-    } catch (err) {
-      status.textContent = `couldn't load the preview: ${err}`;
-      return;
-    }
-
-    sourceImage = source;
-    fileId = result.file_id;
-    stride = result.stride;
-    imgW = source.naturalWidth;
-    imgH = source.naturalHeight;
-    canvas.width = imgW;
-    canvas.height = imgH;
-    candidates = result.candidates;
-    selectedIndex = result.primary_index;
-    currentCenter = candidates[selectedIndex].center.slice();
-
-    if (candidates.length > 1) {
-      candidateHint.textContent =
-        result.mode_used === "face"
-          ? `${candidates.length - 1} face(s) found - click one on the preview to crop around it (or "All faces", selected by default).`
-          : `${candidates.length} candidates found - click one on the preview to crop around it.`;
-      candidateHint.hidden = false;
-    }
-
-    recomputeFromCenter();
-
-    status.textContent = `done (${result.mode_used} mode)`;
-    mount.hidden = true;
-    canvasWrap.hidden = false;
-    applyButton.hidden = false;
-    resetButton.hidden = false;
-    changePhotoButton.hidden = false;
-    canvasWrap.focus();
   });
 
   applyButton.addEventListener("click", async () => {
     if (!cropRect || !fileId) return;
-    status.textContent = "applying...";
+    setBusy(actionBar, status, "applying...");
 
-    const [px0, py0, px1, py1] = cropRect;
-    const payload = {
-      file_id: fileId,
-      x0: Math.round(px0 * stride),
-      y0: Math.round(py0 * stride),
-      x1: Math.round(px1 * stride),
-      y1: Math.round(py1 * stride),
-    };
-
-    let response;
     try {
-      response = await fetch("/api/ai-crop/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    } catch (err) {
-      status.textContent = `request failed: ${err}`;
-      return;
+      const [px0, py0, px1, py1] = cropRect;
+      const payload = {
+        file_id: fileId,
+        x0: Math.round(px0 * stride),
+        y0: Math.round(py0 * stride),
+        x1: Math.round(px1 * stride),
+        y1: Math.round(py1 * stride),
+      };
+
+      let response;
+      try {
+        response = await fetch("/api/ai-crop/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (err) {
+        status.textContent = `request failed: ${err}`;
+        return;
+      }
+
+      if (!response.ok) {
+        status.textContent = `server error: ${response.status}`;
+        return;
+      }
+
+      const result = await response.json();
+      status.textContent = "done";
+      appliedRect = cropRect.slice();
+      redraw();
+
+      renderReport(report, [
+        ["Crop size (full-res)", `${payload.x1 - payload.x0} x ${payload.y1 - payload.y0}`],
+        ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
+      ]);
+      report.hidden = false;
+      download.href = `/api/file/${result.result_id}/download`;
+      download.hidden = false;
+    } finally {
+      clearBusy(actionBar);
     }
-
-    if (!response.ok) {
-      status.textContent = `server error: ${response.status}`;
-      return;
-    }
-
-    const result = await response.json();
-    status.textContent = "done";
-    appliedRect = cropRect.slice();
-    redraw();
-
-    renderReport(report, [
-      ["Crop size (full-res)", `${payload.x1 - payload.x0} x ${payload.y1 - payload.y0}`],
-      ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
-    ]);
-    report.hidden = false;
-    download.href = `/api/file/${result.result_id}/download`;
-    download.hidden = false;
   });
 }
 

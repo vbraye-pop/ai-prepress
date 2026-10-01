@@ -21,6 +21,31 @@ body {
   outline-offset: 2px;
 }
 
+/* The one spinner the app ever shows at a time - every status line uses the same markup via
+   setBusy()/setBusyMessage() in app.js, and only one action bar can be mid-request at once since
+   its own buttons are locked for the duration, so there's never more than one of these visible. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border: 2px solid var(--hairline-strong);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
 html {
   /* Firefox's scrollbar-color is inherited, so one declaration here covers every scrolling
      container in the app (inspector panels, legend lists) instead of a rule per element. */
