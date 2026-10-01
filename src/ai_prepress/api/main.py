@@ -271,44 +271,75 @@ async def api_retouch_faces_apply(request: RetouchApplyRequest):
     )
 
 
-@app.post("/api/ai-crop")
-async def api_ai_crop(
-    image: UploadFile = File(...),
-    mode: str = Form("subject"),  # "subject" | "face"
-    aspect_ratio: float = Form(1.0),
-    margin: float = Form(0.15),
-    face_index: int = Form(0),
-):
-    """Deterministic crop geometry (aspect ratio/margin/centering) around one ML-derived bbox -
-    see ai_prepress.features.ai_crop for the two bbox sources and the actual crop math. `bbox`
-    and `crop_rect` come back pre-scaled to /preview.jpg's own downsampling stride, same
-    convention /api/face-regions already uses, so the browser can draw both straight onto the
-    preview it already has."""
+class AiCropApplyRequest(BaseModel):
+    file_id: str
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+
+
+@app.post("/api/ai-crop/detect")
+async def api_ai_crop_detect(image: UploadFile = File(...), mode: str = Form("auto")):
+    """The one expensive/model-touching step - runs exactly once per photo. Everything after
+    this (aspect ratio, margin, dragging the crop rectangle by hand, swapping between detected
+    faces) is pure client-side arithmetic (ui/app.js's JS port of
+    ai_prepress.features.ai_crop.compute_crop) with no further server round trip, until the
+    person actually hits Apply. `bbox`/`center` on every candidate come back pre-scaled to
+    /preview.jpg's own downsampling stride, same convention /api/face-regions already uses, so
+    the browser can draw and hit-test them straight on the preview it already has - `stride` is
+    included so the client can convert its own final rect back to full-resolution pixels for
+    /api/ai-crop/apply."""
     file_id = _store_upload(image)
     loaded = core_io.load(_find_file(file_id))
     height, width = loaded.array.shape[:2]
 
     try:
-        if mode == "face":
-            bbox = ai_crop.face_bbox(loaded, face_index=face_index)
+        if mode == "subject":
+            detection = ai_crop.detect_subject(loaded)
+        elif mode == "face":
+            detection = ai_crop.detect_faces(loaded)
         else:
-            bbox = ai_crop.subject_bbox(loaded)
+            detection = ai_crop.detect_auto(loaded)
     except ai_crop.NoSubjectFoundError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    rect = ai_crop.compute_crop((width, height), bbox, aspect_ratio=aspect_ratio, margin=margin)
+    stride = _preview_stride(height, width)
+
+    def scaled(values):
+        return [round(v / stride, 1) for v in values]
+
+    return JSONResponse(
+        {
+            "file_id": file_id,
+            "width": round(width / stride, 1),
+            "height": round(height / stride, 1),
+            "stride": stride,
+            "mode_used": detection.mode_used,
+            "primary_index": detection.primary_index,
+            "candidates": [
+                {"bbox": scaled(c.bbox), "center": scaled(c.center), "label": c.label}
+                for c in detection.candidates
+            ],
+        }
+    )
+
+
+@app.post("/api/ai-crop/apply")
+async def api_ai_crop_apply(request: AiCropApplyRequest):
+    """Takes the client's already-finalized crop rect (full-resolution pixel coords - the client
+    converts from its own preview-space geometry using /detect's `stride`) and just slices and
+    saves. No mode/aspect/margin params here at all; the client resolved all of that already."""
+    loaded = core_io.load(_find_file(request.file_id))
+    rect = ai_crop.CropRect(x0=request.x0, y0=request.y0, x1=request.x1, y1=request.y1)
     cropped = ai_crop.apply_crop(loaded, rect)
 
     result_id = _store_bytes(b"", ".tiff")
     core_io.save(cropped, _find_file(result_id))
 
-    stride = _preview_stride(height, width)
     return JSONResponse(
         {
-            "file_id": file_id,
             "result_id": result_id,
-            "bbox": [round(v / stride, 1) for v in bbox],
-            "crop_rect": [round(v / stride, 1) for v in (rect.x0, rect.y0, rect.x1, rect.y1)],
             "icc_profile_present": cropped.icc_profile is not None,
         }
     )
