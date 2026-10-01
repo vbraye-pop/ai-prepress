@@ -228,6 +228,15 @@ a.btn {
   accent-color: var(--primary);
 }
 
+/* a single-line checkbox + label, same row-spacing convention as .slider-row - AI Crop's
+   "Lock aspect" toggle first */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--s-sm) 0;
+}
+
 .legend-list {
   list-style: none;
   margin: var(--s-md) 0 0;

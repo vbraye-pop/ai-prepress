@@ -238,12 +238,14 @@
         <div class="viewport-slot stage-viewport">
           <div class="face-stage">
             <div id="crop-import-mount"></div>
-            <div id="crop-canvas-wrap" class="face-canvas-wrap" hidden>
+            <div id="crop-canvas-wrap" class="face-canvas-wrap" hidden tabindex="0">
               <canvas id="crop-canvas"></canvas>
             </div>
           </div>
           <div class="action-bar">
-            <button type="button" class="btn btn-primary" id="crop-submit" disabled>Compute crop</button>
+            <button type="button" class="btn btn-primary" id="crop-detect" disabled>Detect</button>
+            <button type="button" class="btn btn-primary" id="crop-apply" hidden>Apply crop</button>
+            <button type="button" class="btn-link" id="crop-reset" hidden>Reset to detected</button>
             <button type="button" class="btn btn-secondary" id="crop-change-photo" hidden>Change photo</button>
           </div>
         </div>
@@ -251,31 +253,60 @@
           <div class="inspector-head">
             <span class="t-eyebrow">AI Crop</span>
           </div>
-          <p id="crop-placeholder" class="t-caption">Import an image to crop around its detected subject or a face.</p>
+          <p id="crop-placeholder" class="t-caption">Import an image, pick a bbox source, hit Detect. Drag the crop rectangle's corners or body to fine-tune before applying.</p>
           <div id="crop-status" class="status"></div>
 
           <label class="field-label" for="crop-mode">Bbox source
             <select class="input" id="crop-mode">
+              <option value="auto" selected>Auto (face, else subject)</option>
               <option value="subject">Subject (BiRefNet)</option>
               <option value="face">Face (MediaPipe, local)</option>
             </select>
           </label>
-          <label class="field-label" for="crop-face-index" id="crop-face-index-row" hidden>Face index
-            <input type="number" class="input" id="crop-face-index" min="0" value="0" />
-          </label>
+          <p id="crop-candidate-hint" class="t-caption" hidden></p>
+
           <label class="field-label" for="crop-aspect">Aspect ratio
             <select class="input" id="crop-aspect">
-              <option value="1">Square (1:1)</option>
-              <option value="0.8">Portrait (4:5)</option>
-              <option value="1.3333333333333333">Standard (4:3)</option>
-              <option value="1.5">Classic (3:2)</option>
-              <option value="1.7777777777777777" selected>Widescreen (16:9)</option>
+              <option value="original">Original (source ratio)</option>
+              <optgroup label="Print">
+                <option value="1.5">10x15 / 20x30cm (3:2)</option>
+                <option value="1.4">5x7 / 13x18cm</option>
+                <option value="1.25" selected>8x10 / 16x20 (4:5)</option>
+                <option value="1.2727272727272727">11x14</option>
+                <option value="1.3333333333333333">Panneau 4x3 (affichage)</option>
+                <option value="1.4142135623730951">ISO A-series (A4/A3/A5)</option>
+                <option value="1.4666666666666667">MUPI / Abribus</option>
+              </optgroup>
+              <optgroup label="Digital">
+                <option value="1">Square (1:1)</option>
+                <option value="1.7777777777777777">Widescreen (16:9)</option>
+              </optgroup>
+              <option value="custom">Custom...</option>
             </select>
           </label>
+          <div id="crop-custom-row" class="field-row" hidden>
+            <label class="field-label" for="crop-custom-w">W<input type="number" class="input" id="crop-custom-w" min="1" value="1" /></label>
+            <label class="field-label" for="crop-custom-h">H<input type="number" class="input" id="crop-custom-h" min="1" value="1" /></label>
+          </div>
+          <div class="field-row">
+            <button type="button" class="btn btn-ghost" id="crop-swap-orientation" title="Swap width/height">Swap W/H</button>
+            <label class="t-caption checkbox-row" for="crop-lock-aspect">
+              <input type="checkbox" id="crop-lock-aspect" checked /> Lock aspect
+            </label>
+          </div>
+
           <div class="slider-row">
             <label for="crop-margin" class="t-caption">Margin</label>
             <input type="range" id="crop-margin" min="0" max="100" value="15" />
           </div>
+
+          <label class="field-label" for="crop-grid">Composition grid
+            <select class="input" id="crop-grid">
+              <option value="thirds" selected>Rule of thirds</option>
+              <option value="golden">Golden ratio</option>
+              <option value="none">None</option>
+            </select>
+          </label>
 
           <dl id="crop-report" class="stat-list" hidden></dl>
           <a id="crop-download" class="btn btn-secondary" href="#" hidden>Download cropped TIFF</a>

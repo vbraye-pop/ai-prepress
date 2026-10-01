@@ -957,8 +957,64 @@ function setupLayerSeparation() {
   });
 }
 
+// ---- AI Crop geometry: exact JS port of ai_prepress.features.ai_crop.compute_crop -------------
+// Kept in sync by hand with the Python version. This is what lets aspect ratio, margin, and
+// manual drag/resize all update instantly with zero server round-trips - only Detect and Apply
+// touch the server. See ai_prepress/features/ai_crop.py's own module docstring for why that
+// split exists.
+function computeCropRect(imgW, imgH, bbox, aspectRatio, margin, center) {
+  const [x0, y0, x1, y1] = bbox;
+  const bboxW = x1 - x0;
+  const bboxH = y1 - y0;
+  const [cx, cy] = center || [(x0 + x1) / 2, (y0 + y1) / 2];
+
+  const pad = margin * Math.max(bboxW, bboxH);
+  const paddedW = bboxW + 2 * pad;
+  const paddedH = bboxH + 2 * pad;
+
+  let cropW, cropH;
+  if (paddedW / paddedH > aspectRatio) {
+    cropW = paddedW;
+    cropH = cropW / aspectRatio;
+  } else {
+    cropH = paddedH;
+    cropW = cropH * aspectRatio;
+  }
+
+  // can't ask for a crop bigger than the source image itself along either axis
+  const scale = Math.min(1, imgW / cropW, imgH / cropH);
+  cropW *= scale;
+  cropH *= scale;
+
+  const left = Math.min(Math.max(cx - cropW / 2, 0), imgW - cropW);
+  const top = Math.min(Math.max(cy - cropH / 2, 0), imgH - cropH);
+
+  const rx0 = Math.round(left);
+  const ry0 = Math.round(top);
+  const rx1 = Math.min(imgW, rx0 + Math.round(cropW));
+  const ry1 = Math.min(imgH, ry0 + Math.round(cropH));
+  return [rx0, ry0, rx1, ry1];
+}
+
+function clampRectToImage(rect, imgW, imgH) {
+  let [x0, y0, x1, y1] = rect;
+  const w = x1 - x0;
+  const h = y1 - y0;
+  x0 = Math.min(Math.max(x0, 0), imgW - w);
+  y0 = Math.min(Math.max(y0, 0), imgH - h);
+  return [x0, y0, x0 + w, y0 + h];
+}
+
+function rectCenter(rect) {
+  return [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2];
+}
+
+const CROP_HANDLE_HIT_RADIUS = 10; // px, generous click target around each corner handle
+
 function setupAiCrop() {
-  const submitButton = document.getElementById("crop-submit");
+  const detectButton = document.getElementById("crop-detect");
+  const applyButton = document.getElementById("crop-apply");
+  const resetButton = document.getElementById("crop-reset");
   const changePhotoButton = document.getElementById("crop-change-photo");
   const mount = document.getElementById("crop-import-mount");
   const placeholder = document.getElementById("crop-placeholder");
@@ -966,85 +1022,316 @@ function setupAiCrop() {
   const canvasWrap = document.getElementById("crop-canvas-wrap");
   const canvas = document.getElementById("crop-canvas");
   const modeSelect = document.getElementById("crop-mode");
-  const faceIndexRow = document.getElementById("crop-face-index-row");
-  const faceIndexInput = document.getElementById("crop-face-index");
+  const candidateHint = document.getElementById("crop-candidate-hint");
   const aspectSelect = document.getElementById("crop-aspect");
+  const customRow = document.getElementById("crop-custom-row");
+  const customW = document.getElementById("crop-custom-w");
+  const customH = document.getElementById("crop-custom-h");
+  const swapButton = document.getElementById("crop-swap-orientation");
+  const lockAspectCheckbox = document.getElementById("crop-lock-aspect");
   const marginSlider = document.getElementById("crop-margin");
+  const gridSelect = document.getElementById("crop-grid");
   const report = document.getElementById("crop-report");
   const download = document.getElementById("crop-download");
 
   let sourceImage = null;
-  let bbox = null; // [x0, y0, x1, y1], already scaled to the preview's own stride
-  let cropRect = null; // same scaling
+  let imgW = 0;
+  let imgH = 0; // preview-space dimensions - what /detect returned, already stride-scaled
+  let stride = 1;
+  let fileId = null;
+  let candidates = []; // [{bbox:[x0,y0,x1,y1], center:[cx,cy], label}]
+  let selectedIndex = 0;
+  let cropRect = null; // [x0,y0,x1,y1], preview space
+  let currentCenter = null; // [cx,cy], preview space - follows manual drags/resizes
+  let orientationSwapped = false;
+  let dragMode = null; // null | "move" | "resize"
+  let dragHandleAnchor = null; // the FIXED opposite corner while resizing
+  let dragStart = null;
+  let rectAtDragStart = null;
 
-  function resetResult() {
+  function resetAll() {
     mount.hidden = false;
     canvasWrap.hidden = true;
+    applyButton.hidden = true;
+    resetButton.hidden = true;
     changePhotoButton.hidden = true;
     report.hidden = true;
     download.hidden = true;
+    candidateHint.hidden = true;
     placeholder.hidden = false;
     status.textContent = "";
     sourceImage = null;
-    bbox = null;
+    candidates = [];
     cropRect = null;
+    currentCenter = null;
+    fileId = null;
   }
 
   const importer = createImageImport({
     label: "Drop an image here",
     hint: "or click to browse",
     onFile: (file) => {
-      submitButton.disabled = !file;
-      if (!file) resetResult();
+      detectButton.disabled = !file;
+      if (!file) resetAll();
     },
   });
   mount.appendChild(importer.el);
 
   changePhotoButton.addEventListener("click", () => importer.reset());
+  // mode/aspect/margin/grid/lock settings deliberately survive "Change photo" - the same rule
+  // reapplies to the next upload with no need to reconfigure every control, a lightweight version
+  // of Capture One's own "set a reference crop, apply it to the next shot" idea (see README)
+  // that doesn't need a multi-file batch queue to be useful.
 
-  modeSelect.addEventListener("change", () => {
-    faceIndexRow.hidden = modeSelect.value !== "face";
+  function aspectRatio() {
+    let base;
+    if (aspectSelect.value === "original") {
+      base = imgW && imgH ? imgW / imgH : 1;
+    } else if (aspectSelect.value === "custom") {
+      base = (Number(customW.value) || 1) / (Number(customH.value) || 1);
+    } else {
+      base = Number(aspectSelect.value) || 1;
+    }
+    return orientationSwapped ? 1 / base : base;
+  }
+
+  function marginFraction() {
+    return Number(marginSlider.value) / 100;
+  }
+
+  function recomputeFromCenter() {
+    if (!candidates.length || !currentCenter) return;
+    cropRect = computeCropRect(
+      imgW, imgH, candidates[selectedIndex].bbox, aspectRatio(), marginFraction(), currentCenter
+    );
+    redraw();
+  }
+
+  function selectCandidate(index) {
+    selectedIndex = index;
+    currentCenter = candidates[index].center.slice();
+    recomputeFromCenter();
+  }
+
+  aspectSelect.addEventListener("change", () => {
+    customRow.hidden = aspectSelect.value !== "custom";
+    recomputeFromCenter();
   });
+  customW.addEventListener("input", recomputeFromCenter);
+  customH.addEventListener("input", recomputeFromCenter);
+  marginSlider.addEventListener("input", recomputeFromCenter);
+  gridSelect.addEventListener("change", redraw);
+  swapButton.addEventListener("click", () => {
+    orientationSwapped = !orientationSwapped;
+    recomputeFromCenter();
+  });
+  resetButton.addEventListener("click", () => selectCandidate(selectedIndex));
+
+  // --- drawing --------------------------------------------------------------------------------
+
+  function drawGrid(rect) {
+    const kind = gridSelect.value;
+    if (kind === "none") return;
+    const [x0, y0, x1, y1] = rect;
+    const w = x1 - x0;
+    const h = y1 - y0;
+    // rule of thirds splits at 1/3 and 2/3; a golden-ratio (phi) grid sits closer to center,
+    // the standard approximation used across Lightroom/Photoshop/Affinity's own overlay sets
+    const fracs = kind === "golden" ? [0.382, 0.618] : [1 / 3, 2 / 3];
+    const ctx = canvas.getContext("2d");
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.65)";
+    ctx.lineWidth = 1;
+    for (const f of fracs) {
+      ctx.beginPath();
+      ctx.moveTo(x0 + w * f, y0);
+      ctx.lineTo(x0 + w * f, y1);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x0, y0 + h * f);
+      ctx.lineTo(x1, y0 + h * f);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function cropHandlePoints(rect) {
+    const [x0, y0, x1, y1] = rect;
+    return [
+      [x0, y0],
+      [x1, y0],
+      [x0, y1],
+      [x1, y1],
+    ];
+  }
 
   function redraw() {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
-    if (!bbox || !cropRect) return;
 
-    // detected bbox: thin dashed outline - what the model found
-    ctx.setLineDash([6, 4]);
-    ctx.strokeStyle = "#f5dc5e";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]);
+    // candidate markers only matter when there's more than one to choose between (several
+    // faces, or a face set plus its "All faces" union) - a single candidate needs no picker
+    if (candidates.length > 1) {
+      candidates.forEach((c, i) => {
+        const [cx, cy] = c.center;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+        ctx.fillStyle = i === selectedIndex ? "#8a1224" : "rgba(28,28,38,0.85)";
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      });
+    }
 
-    // computed crop rect: bold solid outline - what actually gets cropped
-    ctx.setLineDash([]);
+    if (!cropRect) return;
+    drawGrid(cropRect);
+
+    const [x0, y0, x1, y1] = cropRect;
     ctx.strokeStyle = "#8a1224";
     ctx.lineWidth = 3;
-    ctx.strokeRect(cropRect[0], cropRect[1], cropRect[2] - cropRect[0], cropRect[3] - cropRect[1]);
+    ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+
+    for (const [hx, hy] of cropHandlePoints(cropRect)) {
+      ctx.fillStyle = "#8a1224";
+      ctx.fillRect(hx - 5, hy - 5, 10, 10);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(hx - 5, hy - 5, 10, 10);
+    }
   }
 
-  submitButton.addEventListener("click", async () => {
+  // --- interaction: drag to move, drag a corner to resize, click a marker to re-center --------
+
+  function canvasPoint(event) {
+    const bounds = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / bounds.width;
+    const scaleY = canvas.height / bounds.height;
+    return [(event.clientX - bounds.left) * scaleX, (event.clientY - bounds.top) * scaleY];
+  }
+
+  function hitHandle(point) {
+    if (!cropRect) return null;
+    for (const corner of cropHandlePoints(cropRect)) {
+      if (Math.abs(point[0] - corner[0]) <= CROP_HANDLE_HIT_RADIUS && Math.abs(point[1] - corner[1]) <= CROP_HANDLE_HIT_RADIUS) {
+        return corner;
+      }
+    }
+    return null;
+  }
+
+  function pointInRect(point, rect) {
+    return point[0] >= rect[0] && point[0] <= rect[2] && point[1] >= rect[1] && point[1] <= rect[3];
+  }
+
+  canvas.addEventListener("mousedown", (event) => {
+    if (!cropRect) return;
+    const point = canvasPoint(event);
+    const handle = hitHandle(point);
+
+    if (handle) {
+      dragMode = "resize";
+      const [x0, y0, x1, y1] = cropRect;
+      dragHandleAnchor = [
+        Math.abs(handle[0] - x0) < Math.abs(handle[0] - x1) ? x1 : x0,
+        Math.abs(handle[1] - y0) < Math.abs(handle[1] - y1) ? y1 : y0,
+      ];
+    } else if (pointInRect(point, cropRect)) {
+      dragMode = "move";
+      dragStart = point;
+      rectAtDragStart = cropRect.slice();
+    } else if (candidates.length > 1) {
+      const index = candidates.findIndex((c) => pointInRect(point, c.bbox));
+      if (index >= 0) selectCandidate(index);
+      return;
+    } else {
+      return;
+    }
+    event.preventDefault();
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!dragMode) return;
+    const point = canvasPoint(event);
+
+    if (dragMode === "move") {
+      const dx = point[0] - dragStart[0];
+      const dy = point[1] - dragStart[1];
+      const [sx0, sy0, sx1, sy1] = rectAtDragStart;
+      cropRect = clampRectToImage([sx0 + dx, sy0 + dy, sx1 + dx, sy1 + dy], imgW, imgH);
+    } else {
+      // resize from a fixed opposite corner - aspect-locked resizing picks whichever axis
+      // implies the larger rect, same "farthest drag wins" convention Photoshop/Figma use
+      const [ax, ay] = dragHandleAnchor;
+      let x0, y0, x1, y1;
+      if (lockAspectCheckbox.checked) {
+        const ratio = aspectRatio();
+        const dx = point[0] - ax;
+        const dy = point[1] - ay;
+        const wFromX = Math.abs(dx);
+        const hFromX = wFromX / ratio;
+        const hFromY = Math.abs(dy);
+        const wFromY = hFromY * ratio;
+        const useX = wFromX * hFromX >= wFromY * hFromY;
+        const w = useX ? wFromX : wFromY;
+        const h = useX ? hFromX : hFromY;
+        const signX = dx >= 0 ? 1 : -1;
+        const signY = dy >= 0 ? 1 : -1;
+        x0 = ax; y0 = ay; x1 = ax + signX * w; y1 = ay + signY * h;
+      } else {
+        x0 = ax; y0 = ay; x1 = point[0]; y1 = point[1];
+      }
+      const rect = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
+      cropRect = clampRectToImage(rect, imgW, imgH);
+    }
+    currentCenter = rectCenter(cropRect);
+    redraw();
+  });
+
+  window.addEventListener("mouseup", () => {
+    dragMode = null;
+  });
+
+  canvasWrap.addEventListener("keydown", (event) => {
+    if (!cropRect) return;
+    const step = event.shiftKey ? 10 : 1;
+    let dx = 0, dy = 0;
+    if (event.key === "ArrowLeft") dx = -step;
+    else if (event.key === "ArrowRight") dx = step;
+    else if (event.key === "ArrowUp") dy = -step;
+    else if (event.key === "ArrowDown") dy = step;
+    else return;
+    event.preventDefault();
+
+    const [x0, y0, x1, y1] = cropRect;
+    cropRect = clampRectToImage([x0 + dx, y0 + dy, x1 + dx, y1 + dy], imgW, imgH);
+    currentCenter = rectCenter(cropRect);
+    redraw();
+  });
+
+  // --- detect / apply ---------------------------------------------------------------------------
+
+  detectButton.addEventListener("click", async () => {
     const file = importer.getFile();
     if (!file) return;
 
-    status.textContent = "computing crop...";
+    status.textContent = "detecting...";
     placeholder.hidden = true;
     canvasWrap.hidden = true;
+    applyButton.hidden = true;
+    resetButton.hidden = true;
     changePhotoButton.hidden = true;
     report.hidden = true;
     download.hidden = true;
+    candidateHint.hidden = true;
 
     const body = new FormData();
     body.append("image", file);
     body.append("mode", modeSelect.value);
-    body.append("aspect_ratio", aspectSelect.value);
-    body.append("margin", String(Number(marginSlider.value) / 100));
-    body.append("face_index", faceIndexInput.value);
 
     let response;
     try {
-      response = await fetch("/api/ai-crop", { method: "POST", body });
+      response = await fetch("/api/ai-crop/detect", { method: "POST", body });
     } catch (err) {
       status.textContent = `request failed: ${err}`;
       return;
@@ -1068,25 +1355,75 @@ function setupAiCrop() {
     }
 
     sourceImage = source;
-    canvas.width = source.naturalWidth;
-    canvas.height = source.naturalHeight;
-    bbox = result.bbox;
-    cropRect = result.crop_rect;
+    fileId = result.file_id;
+    stride = result.stride;
+    imgW = source.naturalWidth;
+    imgH = source.naturalHeight;
+    canvas.width = imgW;
+    canvas.height = imgH;
+    candidates = result.candidates;
+    selectedIndex = result.primary_index;
+    currentCenter = candidates[selectedIndex].center.slice();
 
-    renderReport(report, [
-      ["Detected bbox", bbox.map((v) => v.toFixed(0)).join(", ")],
-      ["Crop rect", cropRect.map((v) => v.toFixed(0)).join(", ")],
-      ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
-    ]);
-    download.href = `/api/file/${result.result_id}/download`;
+    if (candidates.length > 1) {
+      candidateHint.textContent =
+        result.mode_used === "face"
+          ? `${candidates.length - 1} face(s) found - click one on the preview to crop around it (or "All faces", selected by default).`
+          : `${candidates.length} candidates found - click one on the preview to crop around it.`;
+      candidateHint.hidden = false;
+    }
 
-    status.textContent = "done";
+    recomputeFromCenter();
+
+    status.textContent = `done (${result.mode_used} mode)`;
     mount.hidden = true;
     canvasWrap.hidden = false;
+    applyButton.hidden = false;
+    resetButton.hidden = false;
     changePhotoButton.hidden = false;
+    canvasWrap.focus();
+  });
+
+  applyButton.addEventListener("click", async () => {
+    if (!cropRect || !fileId) return;
+    status.textContent = "applying...";
+
+    const [px0, py0, px1, py1] = cropRect;
+    const payload = {
+      file_id: fileId,
+      x0: Math.round(px0 * stride),
+      y0: Math.round(py0 * stride),
+      x1: Math.round(px1 * stride),
+      y1: Math.round(py1 * stride),
+    };
+
+    let response;
+    try {
+      response = await fetch("/api/ai-crop/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      status.textContent = `request failed: ${err}`;
+      return;
+    }
+
+    if (!response.ok) {
+      status.textContent = `server error: ${response.status}`;
+      return;
+    }
+
+    const result = await response.json();
+    status.textContent = "done";
+
+    renderReport(report, [
+      ["Crop size (full-res)", `${payload.x1 - payload.x0} x ${payload.y1 - payload.y0}`],
+      ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
+    ]);
     report.hidden = false;
+    download.href = `/api/file/${result.result_id}/download`;
     download.hidden = false;
-    redraw();
   });
 }
 
