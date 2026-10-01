@@ -21,6 +21,118 @@ body {
   outline-offset: 2px;
 }
 
+html {
+  /* Firefox's scrollbar-color is inherited, so one declaration here covers every scrolling
+     container in the app (inspector panels, legend lists) instead of a rule per element. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--hairline-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: var(--r-full);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--slate);
+  background-clip: padding-box;
+}
+
+/* One rule for every checkbox and range input in the app, instead of the per-element
+   accent-color declarations this had before (.slider-row input, .layer-sep-eye) - they all
+   want the same burgundy accent, so this replaces both rather than sitting alongside them. */
+input[type="checkbox"] {
+  accent-color: var(--primary);
+}
+
+/* Native <select> arrows render differently per browser and don't pick up the dark theme at
+   all - this swaps in one fixed custom chevron (components.css's own --steel, matching the
+   .search-wrap icon's color) and disables the native one everywhere a <select class="input">
+   is used, which is every dropdown in the app. */
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236f6d66' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+
+/* Custom range slider - a flat filled-track + circular thumb in place of each browser's own
+   native widget (which don't share a visual language with each other, let alone this theme).
+   --range-fill is kept updated by app.js's initRangeFills() as a percentage, so the track shows
+   progress the same way a native one implies it, just styled to match everything else here. */
+.slider-row input[type="range"] {
+  --range-fill: 0%;
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  height: 4px;
+  border-radius: var(--r-full);
+  background: linear-gradient(to right, var(--primary) var(--range-fill), var(--hairline-strong) var(--range-fill));
+  outline: none;
+  cursor: pointer;
+}
+
+.slider-row input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: transparent;
+}
+
+.slider-row input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: transparent;
+}
+
+.slider-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px; /* webkit doesn't auto-center the thumb on the track like Firefox does */
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid var(--ink-pure);
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  transition: transform .1s ease;
+}
+
+.slider-row input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 2px solid var(--ink-pure);
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  transition: transform .1s ease;
+}
+
+.slider-row input[type="range"]:hover::-webkit-slider-thumb,
+.slider-row input[type="range"]:hover::-moz-range-thumb {
+  transform: scale(1.1);
+}
+
+.slider-row input[type="range"]:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--primary-soft);
+  outline-offset: 2px;
+}
+.slider-row input[type="range"]:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--primary-soft);
+  outline-offset: 2px;
+}
+
 /* ── Top bar ─────────────────────────────────────────────────────────── */
 .topbar {
   height: 56px;
@@ -102,6 +214,8 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding-bottom: var(--s-sm);
+  border-bottom: 1px solid var(--hairline);
 }
 
 /* ── Stat list (shared between Inspect and Match Look) ──────────────── */
@@ -231,11 +345,6 @@ a.btn {
   flex-direction: column;
   gap: 6px;
   margin: var(--s-sm) 0 var(--s-md);
-}
-
-.slider-row input[type="range"] {
-  width: 100%;
-  accent-color: var(--primary);
 }
 
 /* a single-line checkbox + label, same row-spacing convention as .slider-row - AI Crop's
@@ -438,7 +547,6 @@ a.btn {
 
 .layer-sep-eye {
   flex: 0 0 auto;
-  accent-color: var(--primary);
 }
 
 .layer-sep-coverage {
@@ -457,6 +565,15 @@ a.btn {
 #layer-sep-show-all {
   display: block;
   margin-top: var(--s-md);
+}
+
+/* this ID's own `display: block` above beats `.btn[hidden] { display: none }` on specificity
+   (1,0,0 vs 0,2,0) regardless of source order - the same [hidden]-vs-own-display footgun
+   documented elsewhere in this file (.face-canvas-wrap, .compare-pair, .layer-sep-canvas-wrap),
+   just missed here originally, which left the button visibly showing before any photo was even
+   imported. */
+#layer-sep-show-all[hidden] {
+  display: none;
 }
 
 #layer-sep-download-all {

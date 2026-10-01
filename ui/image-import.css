@@ -47,9 +47,32 @@
   display: none;
 }
 
+/* A plain centered icon read as dead space in a viewport this large - circling it in its own
+   softly-bordered badge gives the empty state one focal point instead of a glyph floating in a
+   void, and reacts to hover/drag the same way the rest of the box already does. */
 .ii-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: var(--s-sm);
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
   color: var(--steel);
-  margin-bottom: var(--s-xs);
+  transition: border-color .15s, color .15s, background .15s;
+}
+
+.image-import:hover .ii-icon {
+  border-color: var(--primary-soft);
+  color: var(--ink-soft);
+}
+
+.image-import[data-drag="true"] .ii-icon {
+  background: var(--tint-burgundy);
+  border-color: var(--primary-soft);
+  color: var(--brand-3);
 }
 
 .ii-label {
