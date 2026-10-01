@@ -9,6 +9,24 @@ function renderReport(dl, entries) {
     .join("");
 }
 
+// Keeps each range input's own --range-fill custom property (read by style.css's custom
+// slider track) in sync with its current value - delegated once globally rather than from each
+// tab's own setup function, since every slider in the app shares the same .slider-row markup
+// and none of them need per-feature behavior here, just the fill percentage kept current.
+function updateRangeFill(input) {
+  const min = Number(input.min) || 0;
+  const max = Number(input.max) || 100;
+  const pct = max === min ? 0 : ((Number(input.value) - min) / (max - min)) * 100;
+  input.style.setProperty("--range-fill", `${pct}%`);
+}
+
+function initRangeFills() {
+  document.querySelectorAll('.slider-row input[type="range"]').forEach((input) => {
+    updateRangeFill(input);
+    input.addEventListener("input", () => updateRangeFill(input));
+  });
+}
+
 const ACTIVE_TAB_STORAGE_KEY = "ai-prepress-active-tab";
 
 function setupViewTabs() {
@@ -1075,6 +1093,7 @@ function setupAiCrop() {
   let candidates = []; // [{bbox:[x0,y0,x1,y1], center:[cx,cy], label}]
   let selectedIndex = 0;
   let cropRect = null; // [x0,y0,x1,y1], preview space
+  let appliedRect = null; // [x0,y0,x1,y1] of the last successfully applied crop, for the ghost outline
   let currentCenter = null; // [cx,cy], preview space - follows manual drags/resizes
   let orientationSwapped = false;
   let dragMode = null; // null | "move" | "resize"
@@ -1096,6 +1115,7 @@ function setupAiCrop() {
     sourceImage = null;
     candidates = [];
     cropRect = null;
+    appliedRect = null;
     currentCenter = null;
     fileId = null;
   }
@@ -1213,6 +1233,25 @@ function setupAiCrop() {
     ctx.restore();
   }
 
+  function rectsRoughlyEqual(a, b) {
+    return a.every((v, i) => Math.abs(v - b[i]) < 0.5);
+  }
+
+  // A faint dashed echo of the last crop that was actually applied (exported), so dragging the
+  // live rect away from it still shows where the "locked in" version sits - otherwise there's no
+  // visual record of it once the active rect moves on. Undimmed and drawn after the dim mask so
+  // it stays legible, but thin/low-opacity/dashed so it never competes with the live frame.
+  function drawGhostRect(rect) {
+    const [x0, y0, x1, y1] = rect;
+    const ctx = canvas.getContext("2d");
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.strokeRect(Math.round(x0) + 0.5, Math.round(y0) + 0.5, Math.round(x1) - Math.round(x0), Math.round(y1) - Math.round(y0));
+    ctx.restore();
+  }
+
   // Corner handles always resize both axes (aspect-locked or free, see the mousemove handler
   // below). Edge-midpoint handles only ever move one axis and only make sense in freeform mode -
   // showing them while aspect is locked would offer a drag that can't actually do anything, so
@@ -1296,6 +1335,10 @@ function setupAiCrop() {
 
     drawDimMask(cropRect);
     drawGrid(cropRect);
+
+    if (appliedRect && !rectsRoughlyEqual(appliedRect, cropRect)) {
+      drawGhostRect(appliedRect);
+    }
 
     // whole-pixel-snapped (not half-pixel - that convention is for ODD widths) so an even 2px
     // stroke centers cleanly on the boundary instead of anti-aliasing across three pixel rows
@@ -1547,6 +1590,8 @@ function setupAiCrop() {
 
     const result = await response.json();
     status.textContent = "done";
+    appliedRect = cropRect.slice();
+    redraw();
 
     renderReport(report, [
       ["Crop size (full-res)", `${payload.x1 - payload.x0} x ${payload.y1 - payload.y0}`],
@@ -1565,3 +1610,4 @@ setupFaceRegions();
 setupRetouchFaces();
 setupLayerSeparation();
 setupAiCrop();
+initRangeFills();
