@@ -957,9 +957,143 @@ function setupLayerSeparation() {
   });
 }
 
+function setupAiCrop() {
+  const submitButton = document.getElementById("crop-submit");
+  const changePhotoButton = document.getElementById("crop-change-photo");
+  const mount = document.getElementById("crop-import-mount");
+  const placeholder = document.getElementById("crop-placeholder");
+  const status = document.getElementById("crop-status");
+  const canvasWrap = document.getElementById("crop-canvas-wrap");
+  const canvas = document.getElementById("crop-canvas");
+  const modeSelect = document.getElementById("crop-mode");
+  const faceIndexRow = document.getElementById("crop-face-index-row");
+  const faceIndexInput = document.getElementById("crop-face-index");
+  const aspectSelect = document.getElementById("crop-aspect");
+  const marginSlider = document.getElementById("crop-margin");
+  const report = document.getElementById("crop-report");
+  const download = document.getElementById("crop-download");
+
+  let sourceImage = null;
+  let bbox = null; // [x0, y0, x1, y1], already scaled to the preview's own stride
+  let cropRect = null; // same scaling
+
+  function resetResult() {
+    mount.hidden = false;
+    canvasWrap.hidden = true;
+    changePhotoButton.hidden = true;
+    report.hidden = true;
+    download.hidden = true;
+    placeholder.hidden = false;
+    status.textContent = "";
+    sourceImage = null;
+    bbox = null;
+    cropRect = null;
+  }
+
+  const importer = createImageImport({
+    label: "Drop an image here",
+    hint: "or click to browse",
+    onFile: (file) => {
+      submitButton.disabled = !file;
+      if (!file) resetResult();
+    },
+  });
+  mount.appendChild(importer.el);
+
+  changePhotoButton.addEventListener("click", () => importer.reset());
+
+  modeSelect.addEventListener("change", () => {
+    faceIndexRow.hidden = modeSelect.value !== "face";
+  });
+
+  function redraw() {
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+    if (!bbox || !cropRect) return;
+
+    // detected bbox: thin dashed outline - what the model found
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = "#f5dc5e";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]);
+
+    // computed crop rect: bold solid outline - what actually gets cropped
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "#8a1224";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(cropRect[0], cropRect[1], cropRect[2] - cropRect[0], cropRect[3] - cropRect[1]);
+  }
+
+  submitButton.addEventListener("click", async () => {
+    const file = importer.getFile();
+    if (!file) return;
+
+    status.textContent = "computing crop...";
+    placeholder.hidden = true;
+    canvasWrap.hidden = true;
+    changePhotoButton.hidden = true;
+    report.hidden = true;
+    download.hidden = true;
+
+    const body = new FormData();
+    body.append("image", file);
+    body.append("mode", modeSelect.value);
+    body.append("aspect_ratio", aspectSelect.value);
+    body.append("margin", String(Number(marginSlider.value) / 100));
+    body.append("face_index", faceIndexInput.value);
+
+    let response;
+    try {
+      response = await fetch("/api/ai-crop", { method: "POST", body });
+    } catch (err) {
+      status.textContent = `request failed: ${err}`;
+      return;
+    }
+
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      status.textContent = detail.detail || `server error: ${response.status}`;
+      mount.hidden = false;
+      return;
+    }
+
+    const result = await response.json();
+
+    let source;
+    try {
+      source = await loadImage(`/api/file/${result.file_id}/preview.jpg?t=${Date.now()}`);
+    } catch (err) {
+      status.textContent = `couldn't load the preview: ${err}`;
+      return;
+    }
+
+    sourceImage = source;
+    canvas.width = source.naturalWidth;
+    canvas.height = source.naturalHeight;
+    bbox = result.bbox;
+    cropRect = result.crop_rect;
+
+    renderReport(report, [
+      ["Detected bbox", bbox.map((v) => v.toFixed(0)).join(", ")],
+      ["Crop rect", cropRect.map((v) => v.toFixed(0)).join(", ")],
+      ["ICC profile", result.icc_profile_present ? "present" : "missing", result.icc_profile_present ? "good" : "bad"],
+    ]);
+    download.href = `/api/file/${result.result_id}/download`;
+
+    status.textContent = "done";
+    mount.hidden = true;
+    canvasWrap.hidden = false;
+    changePhotoButton.hidden = false;
+    report.hidden = false;
+    download.hidden = false;
+    redraw();
+  });
+}
+
 setupViewTabs();
 setupInspect();
 setupMatchLook();
 setupFaceRegions();
 setupRetouchFaces();
 setupLayerSeparation();
+setupAiCrop();

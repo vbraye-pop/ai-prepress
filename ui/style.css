@@ -181,7 +181,8 @@ a.btn {
 }
 
 .face-stage > #face-import-mount,
-.compare-stage > #retouch-import-mount {
+.compare-stage > #retouch-import-mount,
+.face-stage > #crop-import-mount {
   position: absolute;
   inset: 0;
 }

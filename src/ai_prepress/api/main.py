@@ -33,6 +33,7 @@ from ai_prepress.face_landmarks import (
     skin_region,
     under_eye_band,
 )
+from ai_prepress.features import ai_crop
 from ai_prepress.features.layer_separation import BBOX_ALPHA_THRESHOLD, separate_layers
 from ai_prepress.features.match_look import match_look
 from ai_prepress.features.retouch_faces import RetouchStrengths, retouch_faces
@@ -266,6 +267,49 @@ async def api_retouch_faces_apply(request: RetouchApplyRequest):
             "delta_e_max": report.delta_e_max,
             "bit_depth_collapsed": report.bit_depth_collapsed,
             "icc_profile_present": report.icc_profile_present,
+        }
+    )
+
+
+@app.post("/api/ai-crop")
+async def api_ai_crop(
+    image: UploadFile = File(...),
+    mode: str = Form("subject"),  # "subject" | "face"
+    aspect_ratio: float = Form(1.0),
+    margin: float = Form(0.15),
+    face_index: int = Form(0),
+):
+    """Deterministic crop geometry (aspect ratio/margin/centering) around one ML-derived bbox -
+    see ai_prepress.features.ai_crop for the two bbox sources and the actual crop math. `bbox`
+    and `crop_rect` come back pre-scaled to /preview.jpg's own downsampling stride, same
+    convention /api/face-regions already uses, so the browser can draw both straight onto the
+    preview it already has."""
+    file_id = _store_upload(image)
+    loaded = core_io.load(_find_file(file_id))
+    height, width = loaded.array.shape[:2]
+
+    try:
+        if mode == "face":
+            bbox = ai_crop.face_bbox(loaded, face_index=face_index)
+        else:
+            bbox = ai_crop.subject_bbox(loaded)
+    except ai_crop.NoSubjectFoundError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    rect = ai_crop.compute_crop((width, height), bbox, aspect_ratio=aspect_ratio, margin=margin)
+    cropped = ai_crop.apply_crop(loaded, rect)
+
+    result_id = _store_bytes(b"", ".tiff")
+    core_io.save(cropped, _find_file(result_id))
+
+    stride = _preview_stride(height, width)
+    return JSONResponse(
+        {
+            "file_id": file_id,
+            "result_id": result_id,
+            "bbox": [round(v / stride, 1) for v in bbox],
+            "crop_rect": [round(v / stride, 1) for v in (rect.x0, rect.y0, rect.x1, rect.y1)],
+            "icc_profile_present": cropped.icc_profile is not None,
         }
     )
 

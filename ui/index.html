@@ -27,6 +27,7 @@
       <button class="pill-tab" data-view="face-regions" data-active="false">Face Regions</button>
       <button class="pill-tab" data-view="retouch-faces" data-active="false">Retouch Faces</button>
       <button class="pill-tab" data-view="layer-separation" data-active="false">Layer Separation</button>
+      <button class="pill-tab" data-view="ai-crop" data-active="false">AI Crop</button>
     </nav>
   </header>
 
@@ -229,6 +230,55 @@
           <button type="button" class="btn-link" id="layer-sep-show-all" hidden>Show all</button>
           <ul id="layer-sep-list" class="legend-list" hidden></ul>
           <button type="button" class="btn btn-secondary" id="layer-sep-download-all" hidden>Download all (.zip)</button>
+        </aside>
+      </div>
+    </section>
+    <section id="view-ai-crop" class="view">
+      <div class="workspace">
+        <div class="viewport-slot stage-viewport">
+          <div class="face-stage">
+            <div id="crop-import-mount"></div>
+            <div id="crop-canvas-wrap" class="face-canvas-wrap" hidden>
+              <canvas id="crop-canvas"></canvas>
+            </div>
+          </div>
+          <div class="action-bar">
+            <button type="button" class="btn btn-primary" id="crop-submit" disabled>Compute crop</button>
+            <button type="button" class="btn btn-secondary" id="crop-change-photo" hidden>Change photo</button>
+          </div>
+        </div>
+        <aside class="inspector-panel">
+          <div class="inspector-head">
+            <span class="t-eyebrow">AI Crop</span>
+          </div>
+          <p id="crop-placeholder" class="t-caption">Import an image to crop around its detected subject or a face.</p>
+          <div id="crop-status" class="status"></div>
+
+          <label class="field-label" for="crop-mode">Bbox source
+            <select class="input" id="crop-mode">
+              <option value="subject">Subject (BiRefNet)</option>
+              <option value="face">Face (MediaPipe, local)</option>
+            </select>
+          </label>
+          <label class="field-label" for="crop-face-index" id="crop-face-index-row" hidden>Face index
+            <input type="number" class="input" id="crop-face-index" min="0" value="0" />
+          </label>
+          <label class="field-label" for="crop-aspect">Aspect ratio
+            <select class="input" id="crop-aspect">
+              <option value="1">Square (1:1)</option>
+              <option value="0.8">Portrait (4:5)</option>
+              <option value="1.3333333333333333">Standard (4:3)</option>
+              <option value="1.5">Classic (3:2)</option>
+              <option value="1.7777777777777777" selected>Widescreen (16:9)</option>
+            </select>
+          </label>
+          <div class="slider-row">
+            <label for="crop-margin" class="t-caption">Margin</label>
+            <input type="range" id="crop-margin" min="0" max="100" value="15" />
+          </div>
+
+          <dl id="crop-report" class="stat-list" hidden></dl>
+          <a id="crop-download" class="btn btn-secondary" href="#" hidden>Download cropped TIFF</a>
         </aside>
       </div>
     </section>
