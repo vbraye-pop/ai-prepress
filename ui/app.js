@@ -9,16 +9,40 @@ function renderReport(dl, entries) {
     .join("");
 }
 
+const ACTIVE_TAB_STORAGE_KEY = "ai-prepress-active-tab";
+
 function setupViewTabs() {
   const buttons = document.querySelectorAll("#view-tabs .pill-tab");
+
+  function activateTab(view) {
+    const button = Array.from(buttons).find((b) => b.dataset.view === view);
+    if (!button) return false;
+    buttons.forEach((b) => (b.dataset.active = "false"));
+    document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+    button.dataset.active = "true";
+    document.getElementById(`view-${view}`).classList.add("active");
+    return true;
+  }
+
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
-      buttons.forEach((b) => (b.dataset.active = "false"));
-      document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-      button.dataset.active = "true";
-      document.getElementById(`view-${button.dataset.view}`).classList.add("active");
+      activateTab(button.dataset.view);
+      // per-viewer convenience only (which tab was open) - never anything the app needs back,
+      // so a blocked/cleared store just means it reopens on Inspect, not a broken feature
+      try {
+        localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, button.dataset.view);
+      } catch {
+        /* private browsing or blocked storage - fine, just won't remember the tab */
+      }
     });
   });
+
+  try {
+    const savedView = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+    if (savedView) activateTab(savedView);
+  } catch {
+    /* same as above - start on the default (Inspect) tab */
+  }
 }
 
 function labelize(key) {
@@ -1009,7 +1033,16 @@ function rectCenter(rect) {
   return [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2];
 }
 
-const CROP_HANDLE_HIT_RADIUS = 10; // px, generous click target around each corner handle
+// desired on-SCREEN size in CSS px, not canvas-internal px - the canvas is sized to the full
+// preview image (often 1000+ internal px) then shrunk by object-fit:contain to fit the viewport,
+// so a fixed canvas-space constant here ends up a few real screen pixels, nearly impossible to
+// grab with a mouse. Both the drawn handle and its hit-test radius get multiplied by the actual
+// display scale (see displayScale() below) so they stay a constant, grabbable size on screen
+// regardless of how far the canvas is shrunk for display.
+const CROP_HANDLE_SCREEN_SIZE = 12; // drawn square, CSS px
+const CROP_HANDLE_HIT_SCREEN_RADIUS = 16; // click target, CSS px - deliberately larger than the
+// drawn handle itself, same "generous invisible hit area around a smaller visible control"
+// convention most drag-handle UIs use (Figma, native OS resize corners)
 
 function setupAiCrop() {
   const detectButton = document.getElementById("crop-detect");
@@ -1165,6 +1198,13 @@ function setupAiCrop() {
     ];
   }
 
+  // canvas-internal px per CSS px - multiply a desired on-screen size by this to get the
+  // equivalent size in the coordinate space redraw()/hitHandle() both actually work in
+  function displayScale() {
+    const bounds = canvas.getBoundingClientRect();
+    return bounds.width ? canvas.width / bounds.width : 1;
+  }
+
   function redraw() {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
@@ -1192,12 +1232,14 @@ function setupAiCrop() {
     ctx.lineWidth = 3;
     ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
 
+    const handleSize = CROP_HANDLE_SCREEN_SIZE * displayScale();
+    const half = handleSize / 2;
     for (const [hx, hy] of cropHandlePoints(cropRect)) {
       ctx.fillStyle = "#8a1224";
-      ctx.fillRect(hx - 5, hy - 5, 10, 10);
+      ctx.fillRect(hx - half, hy - half, handleSize, handleSize);
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1.5;
-      ctx.strokeRect(hx - 5, hy - 5, 10, 10);
+      ctx.strokeRect(hx - half, hy - half, handleSize, handleSize);
     }
   }
 
@@ -1212,8 +1254,9 @@ function setupAiCrop() {
 
   function hitHandle(point) {
     if (!cropRect) return null;
+    const radius = CROP_HANDLE_HIT_SCREEN_RADIUS * displayScale();
     for (const corner of cropHandlePoints(cropRect)) {
-      if (Math.abs(point[0] - corner[0]) <= CROP_HANDLE_HIT_RADIUS && Math.abs(point[1] - corner[1]) <= CROP_HANDLE_HIT_RADIUS) {
+      if (Math.abs(point[0] - corner[0]) <= radius && Math.abs(point[1] - corner[1]) <= radius) {
         return corner;
       }
     }
