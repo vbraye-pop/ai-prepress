@@ -4,7 +4,7 @@ A standalone tool for the print/retouching side of an AI image pipeline: color m
 
 ![Inspect view showing a loaded image next to its real dimensions, bit depth, and ICC profile fields](assets/screenshot.png)
 
-Early stage. What's here right now: a shared image I/O layer, an acceptance-check utility, an image inspector (real dimensions, bit depth, ICC profile, EXIF, raw tags), Match Look, Face Regions + Retouch Faces (Dark Circles/Even Skin/Contouring, running locally via MediaPipe landmarks), a local FastAPI service, and a dark-themed HTML/JS front end. Masking, AI crop, Blemish removal, dust removal, background replacement and snap-to-eye aren't built yet.
+Early stage. What's here right now: a shared image I/O layer, an acceptance-check utility, an image inspector (real dimensions, bit depth, ICC profile, EXIF, raw tags), Match Look, Face Regions + Retouch Faces (Dark Circles/Even Skin/Contouring, running locally via MediaPipe landmarks), Layer Separation (per-object RGBA layers + reconstructed background), AI Crop (Subject/Face bbox + deterministic geometry), a local FastAPI service, and a dark-themed HTML/JS front end. Blemish removal, dust removal (RF-DETR fine-tune still pending), background replacement and snap-to-eye aren't built yet.
 
 ## How it works
 
@@ -56,7 +56,7 @@ Needs Python 3.12 - pinned deliberately rather than using whatever's newest on t
 
 ## Usage
 
-Run the API and UI - every feature except Layer Separation runs locally with no environment variables needed. Layer Separation calls a remote Modal-hosted model (`deploy/layer_separation.py`) and needs `AI_PREPRESS_LAYER_SEPARATION_URL` set to that deployment's base URL - see the Layer Separation section below:
+Run the API and UI - Inspect, Match Look, Face Regions, and Retouch Faces run locally with no environment variables needed. Layer Separation and AI Crop's Subject mode call remote Modal-hosted models and need the matching `AI_PREPRESS_*_URL` env vars set to each deployment's own base URL (`AI_PREPRESS_INSTANCE_MATTE_URL` is shared between the two) - see their own sections below; AI Crop's Face mode runs locally like the face-based features above:
 
 ```bash
 uv run uvicorn ai_prepress.api.main:app --reload
@@ -208,6 +208,32 @@ Phase B replaced the primary mechanism with the four-model chain described at th
 - `MATTE_SAM_IOU_THRESHOLD=0.5` (the guard that falls back from BiRefNet's alpha to SAM2's harder-edged mask when they disagree on which object got matted) is a first-cut placeholder, not measured against real BiRefNet/SAM2 disagreement the way other thresholds in this project eventually were.
 - No `MAX_LAYERS` ceiling on the per-instance path - intentional, since a real detector's own count is a more meaningful signal than a raw SAM2 region count ever was, but stated here rather than left implicit.
 
+## AI Crop
+
+Matches the brief's own framing of this feature directly: Capture One's AI Crop is mostly deterministic aspect-ratio/margin/alignment math, with exactly one piece of ML feeding it a Subject or Face bounding box - not a learned end-to-end crop. `ai_prepress.features.ai_crop.compute_crop` is plain geometry (grow the bbox by a margin, expand to the target aspect ratio, clamp to the source image's own bounds), fully unit-tested with no model involved at all; the only remote/local call is finding the box in the first place.
+
+Two bbox sources, both reusing infrastructure this project already had deployed rather than standing up anything new:
+- **Subject** - `ai_prepress.instance_matte` (BiRefNet_HR-matting, the same Modal endpoint Layer Separation's per-instance path uses) run on the **whole photo at once**, not a pre-cropped region. BiRefNet_HR is a general salient-object matting model - it doesn't need a detection or segmentation stage first, so this is the cheapest possible remote call for a crop bbox: one image, one model, no Grounding DINO/SAM2 stage. This is the original brief's "reuse the BiRefNet mask - its bbox IS the Subject detection" idea, pointed at the model this project actually ended up deploying for masking.
+- **Face** - `ai_prepress.face_landmarks`, entirely local, no remote call at all. Reuses the exact `FACE_OVAL` landmark bbox `/api/face-regions` already computes.
+
+**Clamping tradeoff, stated explicitly:** when a subject/face sits near the frame edge, a crop that's both centered on it and entirely inside the source image isn't always possible. `compute_crop` clamps position rather than size - the crop shifts off-center but always keeps the whole detected region in frame, rather than cutting into it to stay centered. Tested directly (`test_compute_crop_clamps_to_image_bounds_near_an_edge`), not just reasoned about.
+
+**Verified against both real test photos**, not just the unit-tested geometry: Subject mode on `art.jpg` (the four-object still life) produced a clean square crop centered on the pitcher/orange/book group with the excess blue background trimmed from both sides - correctly framed, not just non-crashing. Face mode on `portrait.png` produced a well-centered 4:5 headshot crop. Subject mode's real round-trip against a cold-ish Modal container measured ~5s; Face mode, fully local, ~0.4s.
+
+**A real bug this verification caught, not a hypothetical:** the first version of `apply_crop` passed `image.icc_profile` straight through, and `portrait.png` has no embedded profile at all - `io.save()` correctly refused to write it (see Phase 0's "no silent save without a profile" rule) and the live test failed loudly instead of silently. Fixed with the same sRGB fallback `match_look.py`/`retouch_faces.py`/`layer_separation.py` already use for an untagged source, now covered by its own test.
+
+```python
+from ai_prepress.io import load, save
+from ai_prepress.features.ai_crop import apply_crop, compute_crop, face_bbox, subject_bbox
+
+image = load("photo.tiff")
+bbox = subject_bbox(image)  # or face_bbox(image, face_index=0) - needs AI_PREPRESS_INSTANCE_MATTE_URL
+rect = compute_crop(image.array.shape[1::-1], bbox, aspect_ratio=4 / 5, margin=0.15)
+save(apply_crop(image, rect), "cropped.tiff")
+```
+
+**AI Crop tab in the UI**: upload a photo, pick Subject or Face, an aspect-ratio preset, and a margin, hit Compute crop. The preview draws both boxes on the source image - a thin dashed outline for the detected bbox, a bold solid one for the actual computed crop - so it's clear what was detected versus what gets cut, before downloading the full-precision cropped TIFF.
+
 ## Roadmap
 
 - [x] Shared I/O + acceptance checks
@@ -215,7 +241,7 @@ Phase B replaced the primary mechanism with the four-model chain described at th
 - [x] Match Look
 - [ ] pywebview desktop shell around the current FastAPI + HTML UI
 - [x] Layer Separation Phase A - Qwen-Image-Layered behind Modal, RGBA TIFF export, bit-depth-preserving compositing, automatic per-photo layer count (SAM2 + mask post-filtering), automatic sequential naming (InternVL3.5-2B), a contamination validator with recursive repair, a real live-composite layers-panel UI - see above, all deployed and tested against real photos. Still open: a background-fill fallback (LaMa/BrushNet/PowerPaint) - stays deferred, only needed for flat/graphic source images, not natural photography - and `psdtags` native-Photoshop-layers export pending a real round-trip test. Confirmed limitation, not fixed by this phase: the still life's orange+table merge persists - the `layers` parameter genuinely reaches the model and changes its output, but more layers partly manifests as empty junk layers rather than a finer real split, and the contamination validator catches the resulting duplicate layers without being able to repair them. Adjacent-object merging and content bleed across occlusion need Phase B (detect + segment + matte hybrid), not built yet.
-- [ ] AI Crop
+- [x] AI Crop - Subject (BiRefNet_HR on the whole photo) or Face (local MediaPipe) bbox, deterministic aspect-ratio/margin geometry, clamped-not-cropped at frame edges - see above
 - [x] Face regions (`ai_prepress.face_landmarks`, local MediaPipe) - supersedes the earlier Modal-deployed semantic parser, see above. `deploy/face_parsing.py` and `ai_prepress.face_parsing` are still in the repo (real, tested, still deployed) but no longer wired into the UI.
 - [x] Retouch Faces - Dark Circles/Even Skin/Contouring via LF/HF split on the face-region masks, Eye Whiten/Teeth Whiten/Lip Enhance via direct HSL grades, multi-face support, mask Feather/Edge reshape - see above. Blemish removal and manual mask-brush editing still open, not built yet.
 - [x] Dust removal training-data synthesizer (`training/dust_removal/`)
